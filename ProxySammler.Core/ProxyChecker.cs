@@ -121,7 +121,7 @@ public sealed class ProxyChecker
 				}, timeoutCts.Token);
 				requestStream = tls;
 			}
-			byte[] bytes = Encoding.ASCII.GetBytes($"GET {_target.Path} HTTP/1.1\r\nHost: {_target.Host}\r\n" + "User-Agent: ProxySammler/1.5\r\nAccept: text/plain\r\nConnection: close\r\n\r\n");
+			byte[] bytes = Encoding.ASCII.GetBytes($"GET {_target.Path} HTTP/1.1\r\nHost: {_target.Host}\r\n" + "User-Agent: ProxySammler/1.8.0\r\nAccept: text/plain\r\nConnection: close\r\n\r\n");
 			await requestStream.WriteAsync(bytes, timeoutCts.Token);
 			await requestStream.FlushAsync(timeoutCts.Token);
 			string exitIp = ParseExitIp(await ReadResponse(requestStream, timeoutCts.Token));
@@ -174,7 +174,7 @@ public sealed class ProxyChecker
 						Timeout = Timeout.InfiniteTimeSpan
 					};
 					using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, "http://httpbin.org/anything?user=Evilvirus&application=MacAttack");
-					request.Headers.UserAgent.ParseAdd("ProxySammler/1.5-MacAttack-Test");
+					request.Headers.UserAgent.ParseAdd("ProxySammler/1.8.0-MacAttack-Test");
 					using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeoutCts.Token);
 					if (response.StatusCode != HttpStatusCode.OK)
 					{
@@ -272,7 +272,7 @@ public sealed class ProxyChecker
 
 	private async Task EstablishHttpTunnel(Stream stream, CancellationToken ct)
 	{
-		byte[] bytes = Encoding.ASCII.GetBytes($"CONNECT {_target.Host}:{_target.Port} HTTP/1.1\r\nHost: {_target.Host}:{_target.Port}\r\n" + "User-Agent: ProxySammler/1.5\r\nProxy-Connection: keep-alive\r\n\r\n");
+		byte[] bytes = Encoding.ASCII.GetBytes($"CONNECT {_target.Host}:{_target.Port} HTTP/1.1\r\nHost: {_target.Host}:{_target.Port}\r\n" + "User-Agent: ProxySammler/1.8.0\r\nProxy-Connection: keep-alive\r\n\r\n");
 		await stream.WriteAsync(bytes, ct);
 		string text = (await ReadHeader(stream, ct)).Split("\r\n", 2)[0];
 		if (!text.Contains(" 200 ", StringComparison.Ordinal))

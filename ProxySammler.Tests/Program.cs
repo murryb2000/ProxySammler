@@ -2,13 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using ProxySammler.Core;
 using ProxySammler.Persistence;
 
 var failures = new List<string>();
 void Assert(bool condition, string message) { if (!condition) failures.Add(message); }
 
-var temp = Path.Combine(Path.GetTempPath(), "ProxySammler-1.6-Test-" + Guid.NewGuid().ToString("N"));
+var temp = Path.Combine(Path.GetTempPath(), "ProxySammler-1.8.0-Test-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);
 try
 {
@@ -50,6 +54,143 @@ try
     migrated.Save(results);
     Assert(File.ReadAllText(Path.Combine(results, "HTTP.txt")).Contains("9.9.9.9:3128"),
         "Eine vorhandene Trefferliste aus Version 1.5 sollte übernommen werden.");
+
+    var extracted = SourceFormats.Extract("1.2.3.4:80\nhttp://1.2.3.4:80\nsocks4a://2.3.4.5:1080\nsocks5h://3.4.5.6:1080", ProxyProtocol.Http);
+    Assert(extracted.Count == 3 && extracted.Count(p => p.Protocol == ProxyProtocol.Http) == 1 &&
+        extracted.Any(p => p.Protocol == ProxyProtocol.Socks4) && extracted.Any(p => p.Protocol == ProxyProtocol.Socks5),
+        "HTTP-, SOCKS4- und SOCKS5-Adressen müssen erkannt und dedupliziert werden.");
+    Assert(SourceFormats.InferProtocol("https://example.com/socks5.txt") == ProxyProtocol.Socks5 &&
+        SourceFormats.InferProtocol("https://example.com/socks4.csv") == ProxyProtocol.Socks4,
+        "Der Dateiname muss den vermuteten Proxytyp liefern.");
+    Assert(SourceFormats.Extract("ip,port,protocol\n4.4.4.4,1080,socks5", ProxyProtocol.Http)
+        .Single().Protocol == ProxyProtocol.Socks5, "CSV-Spalten müssen als Proxy erkannt werden.");
+    Assert(SourceFormats.Extract("{\"data\":[{\"ip\":\"5.5.5.5\",\"port\":1080,\"type\":\"socks4\"}]}", ProxyProtocol.Http)
+        .Single().Protocol == ProxyProtocol.Socks4, "JSON-Objekte müssen als Proxy erkannt werden.");
+    Assert(SourceFormats.NormalizeUrl("HTTPS://EXAMPLE.COM/list.txt") ==
+        SourceFormats.NormalizeUrl("https://example.com/list.txt"), "URL-Normalisierung muss Duplikate erkennen.");
+
+    var candidate = new SourceCandidate { Url = "https://example.com/list.txt", Protocol = ProxyProtocol.Http,
+        Status = CandidateStatus.Geprueft, Reachable = true, ProxyCount = 100, SampleCount = 12,
+        WorkingCount = 1, UpdatedUtc = DateTimeOffset.UtcNow };
+    candidate.Quality = DiscoveryPolicy.Score(candidate, DateTimeOffset.UtcNow);
+    Assert(DiscoveryPolicy.Suitable(candidate), "Ein einzelner bestätigter Treffer darf trotz niedriger Quote geeignet sein.");
+    candidate.DuplicateContent = true;
+    Assert(DiscoveryPolicy.Score(candidate, DateTimeOffset.UtcNow) < 45,
+        "Doppelte Inhalte müssen die Bewertung sichtbar senken.");
+
+    var discovery = new DiscoveryStore(temp);
+    File.WriteAllText(discovery.CandidatesPath, "{kaputt");
+    File.WriteAllText(discovery.SettingsPath, "{kaputt");
+    Assert(discovery.LoadCandidates().Count == 0 && !discovery.LoadSettings().AutoAcceptGood,
+        "Beschädigte JSON-Dateien dürfen den Start nicht verhindern.");
+    discovery.SaveCandidates([candidate]);
+    Assert(discovery.LoadCandidates().Count == 1 && File.Exists(discovery.CandidatesPath + ".bak"),
+        "Kandidaten müssen atomar mit Sicherung gespeichert werden.");
+    var settings = new DiscoverySettings { LastSearchUtc = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero) };
+    Assert(settings.NextSearchUtc(DateTimeOffset.UtcNow) == settings.LastSearchUtc.Value.AddDays(1),
+        "Tägliches Intervall ist falsch.");
+    settings.Interval = DiscoveryInterval.Woechentlich;
+    Assert(settings.NextSearchUtc(DateTimeOffset.UtcNow) == settings.LastSearchUtc.Value.AddDays(7),
+        "Wöchentliches Intervall ist falsch.");
+
+    var sourcePath = Path.Combine(temp, "sources.txt");
+    var manualLine = "# Manuell\nhttp|https://manual.example/proxy.txt\n";
+    File.WriteAllText(sourcePath, manualLine);
+    candidate.DuplicateContent = false;
+    Assert(SourceRegistry.Add(sourcePath, candidate), "Geprüfte Quelle konnte nicht übernommen werden.");
+    Assert(!SourceRegistry.Add(sourcePath, candidate), "Doppelte Quelle wurde übernommen.");
+    Assert(File.ReadAllText(sourcePath).StartsWith(manualLine) &&
+        File.ReadAllText(sourcePath + ".bak") == manualLine,
+        "Manuelle Quellen müssen erhalten und vor Änderungen gesichert werden.");
+
+    var resolver = new PublicResolver();
+    Assert(!PublicUrlPolicy.IsPublic(IPAddress.Parse("127.0.0.1")) &&
+        !PublicUrlPolicy.IsPublic(IPAddress.Parse("10.0.0.1")) &&
+        !PublicUrlPolicy.IsPublic(IPAddress.Parse("169.254.169.254")) &&
+        !PublicUrlPolicy.IsPublic(IPAddress.Parse("192.168.1.1")),
+        "Lokale, private und Metadaten-Adressen müssen gesperrt sein.");
+    var rejected = false;
+    try { await PublicUrlPolicy.ValidateAsync(new Uri("http://localhost/list.txt"), resolver, CancellationToken.None); }
+    catch (InvalidDataException) { rejected = true; }
+    Assert(rejected, "localhost muss vor dem Abruf gesperrt sein.");
+    var dualStack = await PublicUrlPolicy.ValidateAsync(new Uri("https://public.example/list.txt"),
+        new FixedResolver(IPAddress.Parse("2606:4700:4700::1111"), IPAddress.Parse("8.8.8.8")), CancellationToken.None);
+    Assert(dualStack.Length == 1 && dualStack[0].ToString() == "8.8.8.8",
+        "Dual-Stack-DNS muss sichere IPv4-Adressen verwenden können.");
+    rejected = false;
+    try { await PublicUrlPolicy.ValidateAsync(new Uri("https://private.example/list.txt"),
+        new FixedResolver(IPAddress.Parse("8.8.8.8"), IPAddress.Parse("10.0.0.1")), CancellationToken.None); }
+    catch (InvalidDataException) { rejected = true; }
+    Assert(rejected, "DNS-Antworten mit privaten IPv4-Adressen müssen gesperrt werden.");
+
+    using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(_ =>
+        new HttpResponseMessage(HttpStatusCode.Redirect) { Headers = { Location = new Uri("http://127.0.0.1/secret") } })))
+    {
+        rejected = false;
+        try { await downloader.GetAsync("https://public.example/list.txt", CancellationToken.None); }
+        catch (InvalidDataException) { rejected = true; }
+        Assert(rejected, "Weiterleitungen auf interne Adressen müssen blockiert werden.");
+    }
+    using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(_ =>
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        response.Headers.TryAddWithoutValidation("X-RateLimit-Reset", DateTimeOffset.UtcNow.AddMinutes(2).ToUnixTimeSeconds().ToString());
+        return response;
+    })))
+    {
+        rejected = false;
+        try { await downloader.GetAsync("https://api.github.com/search/repositories", CancellationToken.None); }
+        catch (RateLimitException ex) { rejected = ex.RetryAt > DateTimeOffset.UtcNow; }
+        Assert(rejected, "GitHub-Ratenbegrenzung und Wartezeit müssen erkannt werden.");
+    }
+
+    using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        var body = path.Contains("/search/repositories")
+            ? "{\"items\":[{\"full_name\":\"example/proxy-list\",\"default_branch\":\"main\",\"pushed_at\":\"2026-10-01T00:00:00Z\"}]}"
+            : path.Contains("/git/trees/")
+                ? "{\"tree\":[{\"type\":\"blob\",\"path\":\"proxies/socks5.txt\"}]}"
+                : "Liste: https://example.com/http-proxy-list.csv";
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+    })))
+    {
+        var found = await new GitHubSourceProvider().SearchAsync(downloader, null, CancellationToken.None);
+        Assert(found.Repositories == 1 && found.Links.Any(x => x.Protocol == ProxyProtocol.Socks5) &&
+            found.Links.Any(x => x.Url.Contains("http-proxy-list.csv")),
+            "GitHub-Suche muss Rohdateien und README-Links finden.");
+    }
+
+    IReadOnlyCollection<ProxyEndpoint>? sampled = null;
+    using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(_ =>
+        new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("127.0.0.1:80\n8.8.8.8:8080") })))
+    {
+        var service = new SourceDiscoveryService(new BlockingProvider(), downloader,
+            (proxies, _, _, _) =>
+            {
+                sampled = proxies;
+                return Task.FromResult<IReadOnlyList<ProxyTestResult>>(proxies.Select(p =>
+                    new ProxyTestResult { Proxy = p, IsWorking = true }).ToArray());
+            });
+        var checkedCandidate = new SourceCandidate { Url = "https://public.example/proxies.txt" };
+        await service.CheckAsync(checkedCandidate, new HashSet<string>(), 1, TimeSpan.FromSeconds(1), CancellationToken.None);
+        Assert(sampled?.Count == 1 && sampled.Single().Host == "8.8.8.8" && checkedCandidate.ProxyCount == 1,
+            "Private Proxyziele dürfen in automatisch entdeckten Listen nicht geprüft werden.");
+    }
+
+    var gateProvider = new BlockingProvider();
+    using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(_ => new HttpResponseMessage(HttpStatusCode.OK))))
+    {
+        var service = new SourceDiscoveryService(gateProvider, downloader);
+        var first = service.SearchAsync(new List<SourceCandidate>(), [], false, 1, TimeSpan.FromSeconds(1),
+            _ => Task.FromResult(false), null, CancellationToken.None);
+        await gateProvider.Entered.Task;
+        var second = await service.SearchAsync(new List<SourceCandidate>(), [], false, 1, TimeSpan.FromSeconds(1),
+            _ => Task.FromResult(false), null, CancellationToken.None);
+        Assert(second is null, "Parallele Suchläufe müssen verhindert werden.");
+        gateProvider.Release.SetResult(true);
+        Assert(await first is not null, "Erster Suchlauf wurde nicht abgeschlossen.");
+    }
 }
 finally
 {
@@ -62,5 +203,35 @@ if (failures.Count > 0)
     foreach (var failure in failures) Console.Error.WriteLine("- " + failure);
     return 1;
 }
-Console.WriteLine("Alle ProxySammler-1.6-Tests erfolgreich.");
+Console.WriteLine("Alle ProxySammler-1.8.0-Tests erfolgreich.");
 return 0;
+
+sealed class PublicResolver : IAddressResolver
+{
+    public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) =>
+        Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") });
+}
+
+sealed class FixedResolver(params IPAddress[] addresses) : IAddressResolver
+{
+    public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) => Task.FromResult(addresses);
+}
+
+sealed class ReplyHandler(Func<HttpRequestMessage, HttpResponseMessage> reply) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        Task.FromResult(reply(request));
+}
+
+sealed class BlockingProvider : ISourceDiscoveryProvider
+{
+    public TaskCompletionSource<bool> Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource<bool> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public async Task<(IReadOnlyList<DiscoveredLink> Links, int Repositories)> SearchAsync(
+        SafeSourceDownloader downloader, IProgress<string>? progress, CancellationToken cancellationToken)
+    {
+        Entered.SetResult(true);
+        await Release.Task;
+        return ([], 0);
+    }
+}

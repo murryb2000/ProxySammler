@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+.vs/
+release/
+*.user
+ProxySammler/Ergebnisse/
+ProxySammler/proxy_history.json
+ProxySammler/source_candidates.json
+ProxySammler/source_discovery_settings.json
+ProxySammler/source_health.json
+*.bak

@@ -1,4 +1,4 @@
-ProxySammler 1.7 – Quellcode
+ProxySammler 1.8.0 – Quellcode
 =============================
 
 Enthalten sind:
@@ -7,6 +7,9 @@ Enthalten sind:
 - ProxySammler.Core: Sammeln, Erkennen und Prüfen der Proxys
 - ProxySammler.Persistence: Verwaltung der drei dauerhaften Proxylisten
 - ProxySammler.Tests: Projekttests
+- GitHubSourceProvider und SourceDiscoveryService: neue Quellensuche
+- SafeSourceDownloader: begrenzte Downloads und Prüfung öffentlicher Ziele
+- DiscoveryStore: Kandidaten, Einstellungen und atomare Quellenübernahme
 - ProxySammler/sources.txt: Standardquellen
 - build-release.sh: Skript zum Testen und Erstellen des portablen Windows-Pakets
 

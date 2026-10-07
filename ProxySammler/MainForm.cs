@@ -25,7 +25,17 @@ public sealed class MainForm : Form
     private readonly Button _stop = new() { Text = "Stopp", AutoSize = true, Height = 34, Enabled = false };
     private readonly Button _clipboard = new() { Text = "IP:Port kopieren", AutoSize = true, Enabled = false };
     private readonly Button _sources = new() { Text = "Quellen bearbeiten", AutoSize = true };
+    private readonly Button _discover = new() { Text = "Neue Quellen finden", AutoSize = true };
     private readonly Button _folder = new() { Text = "Ergebnisordner", AutoSize = true };
+    private readonly System.Windows.Forms.Timer _discoveryTimer = new() { Interval = 15_000 };
+    private readonly DiscoveryStore _discoveryStore = new(AppContext.BaseDirectory);
+    private readonly SafeSourceDownloader _discoveryDownloader = new();
+    private readonly SourceDiscoveryService _discoveryService;
+    private ProxyCheckProfile _discoveryProfile = ProxyCheckProfile.SecureGeneric;
+    private readonly DiscoverySettings _discoverySettings;
+    private readonly List<SourceCandidate> _sourceCandidates;
+    private CancellationTokenSource? _discoveryCancellation;
+    private SourceDiscoveryForm? _discoveryForm;
     private readonly DataGridView _grid = new();
     private readonly BindingList<RowModel> _rows = new();
     private readonly ProgressBar _progress = new() { Dock = DockStyle.Fill, Style = ProgressBarStyle.Continuous };
@@ -45,17 +55,22 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "ProxySammler 1.7";
+        Text = "ProxySammler 1.8.0";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
-        MinimumSize = new Size(1220, 620);
-        Size = new Size(1280, 760);
+        MinimumSize = new Size(1450, 620);
+        Size = new Size(1500, 760);
         Font = new Font("Segoe UI", 9F);
         BackColor = Color.FromArgb(245, 247, 250);
 
         Controls.Add(BuildLayout());
         ConfigureGrid();
         EnsureSourcesFile();
+        _discoverySettings = _discoveryStore.LoadSettings();
+        _sourceCandidates = _discoveryStore.LoadCandidates();
+        _discoveryService = new SourceDiscoveryService(new GitHubSourceProvider(), _discoveryDownloader,
+            (sample, bots, timeout, ct) => new ProxyChecker(profile: _discoveryProfile)
+                .CheckAllAsync(sample, bots, timeout, null, null, ct));
         Directory.CreateDirectory(ResultsDirectory);
         var initialStore = ProxyListStore.Load(ResultsDirectory, LegacyPoolDirectory);
         initialStore.Save(ResultsDirectory);
@@ -68,6 +83,7 @@ public sealed class MainForm : Form
         _stop.Click += (_, _) => _cancellation?.Cancel();
         _clipboard.Click += (_, _) => CopyToClipboard();
         _sources.Click += (_, _) => OpenFile(SourcesPath);
+        _discover.Click += (_, _) => OpenDiscovery();
         _folder.Click += (_, _) => OpenFolder(ResultsDirectory);
         _showErrors.CheckedChanged += (_, _) => RenderResults();
         _profile.SelectedIndexChanged += (_, _) => ApplyProfile();
@@ -88,6 +104,15 @@ public sealed class MainForm : Form
             _nextHourlySearch = DateTimeOffset.UtcNow.AddHours(1);
             await StartAsync(true, automatic: true);
         };
+        _discoveryTimer.Tick += async (_, _) =>
+        {
+            if (_discoverySettings.AutomaticSearch && _discoveryCancellation is null &&
+                DateTimeOffset.UtcNow >= (_discoverySettings.NextAllowedUtc ?? DateTimeOffset.MinValue) &&
+                (_discoverySettings.LastSearchUtc is null ||
+                 DateTimeOffset.UtcNow >= _discoverySettings.NextSearchUtc(DateTimeOffset.UtcNow)))
+                await DiscoverAsync(true);
+        };
+        _discoveryTimer.Start();
         FormClosing += (_, e) =>
         {
             if (_cancellation is { IsCancellationRequested: false })
@@ -97,7 +122,12 @@ public sealed class MainForm : Form
                 if (answer != DialogResult.Yes) e.Cancel = true;
                 else _cancellation.Cancel();
             }
-            if (!e.Cancel) _hourlyTimer.Stop();
+            if (!e.Cancel)
+            {
+                _hourlyTimer.Stop();
+                _discoveryTimer.Stop();
+                _discoveryCancellation?.Cancel();
+            }
         };
     }
 
@@ -149,7 +179,7 @@ public sealed class MainForm : Form
         actionsRow.Controls.AddRange(new Control[]
         {
             _start, _newOnly, _retestLists, _stop, Spacer(8),
-            _showErrors, _clipboard, _sources, _folder
+            _showErrors, _clipboard, _sources, _discover, _folder
         });
 
         toolbar.Controls.Add(optionsRow, 0, 0);
@@ -452,6 +482,173 @@ public sealed class MainForm : Form
         else if (_timeout.Value == 30) _timeout.Value = 8;
         _socks4.Enabled = _socks5.Enabled = !macAttack;
         _turbo.Enabled = !macAttack;
+    }
+
+    private void OpenDiscovery()
+    {
+        if (_discoveryForm is { IsDisposed: false }) { _discoveryForm.Activate(); return; }
+        _discoveryForm = new SourceDiscoveryForm(this, _sourceCandidates, _discoverySettings);
+        _discoveryForm.FormClosed += (_, _) => _discoveryForm = null;
+        _discoveryForm.Show(this);
+        _discoveryForm.ShowProgress(_discoveryService.IsRunning ? "Quellensuche läuft…" : "Bereit", _discoveryService.IsRunning);
+    }
+
+    internal void SetDiscoveryOptions(bool automatic, DiscoveryInterval interval, bool autoAccept)
+    {
+        _discoverySettings.AutomaticSearch = automatic;
+        _discoverySettings.Interval = interval;
+        _discoverySettings.AutoAcceptGood = autoAccept;
+        _discoveryStore.SaveSettings(_discoverySettings);
+    }
+
+    internal void SaveCandidates() => _discoveryStore.SaveCandidates(_sourceCandidates);
+    internal void CancelDiscovery() => _discoveryCancellation?.Cancel();
+    internal void OpenSources() => OpenFile(SourcesPath);
+
+    internal async Task DiscoverAsync(bool automatic)
+    {
+        if (_discoveryCancellation is not null || _discoveryService.IsRunning) return;
+        if (_discoverySettings.NextAllowedUtc is { } retry && DateTimeOffset.UtcNow < retry)
+        {
+            _discoveryForm?.ShowProgress($"GitHub begrenzt die Suche. Erneut möglich ab {retry.ToLocalTime():g}.", false);
+            return;
+        }
+        _discoveryCancellation = new CancellationTokenSource();
+        _discoveryProfile = SelectedProfile;
+        _discoverySettings.LastSearchUtc = DateTimeOffset.UtcNow;
+        _discoveryStore.SaveSettings(_discoverySettings);
+        _discoveryForm?.ShowProgress("Quellensuche startet…", true);
+        try
+        {
+            var progress = new Progress<string>(message =>
+            {
+                _discoveryForm?.ShowProgress(message, true);
+                _status.Text = "Quellensuche läuft";
+            });
+            var knownSources = ProxyCollector.ReadSources(SourcesPath);
+            var bots = (int)_concurrency.Value;
+            var timeout = TimeSpan.FromSeconds((double)_timeout.Value);
+            var autoAccept = _discoverySettings.AutoAcceptGood;
+            var summary = await Task.Run(() => _discoveryService.SearchAsync(_sourceCandidates,
+                knownSources, autoAccept, bots, timeout, c =>
+                {
+                    var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    BeginInvoke((Action)(() =>
+                    {
+                        try { completion.SetResult(AcceptSourceCore(c)); }
+                        catch (Exception error) { completion.SetException(error); }
+                    }));
+                    return completion.Task;
+                }, progress, _discoveryCancellation.Token));
+            SaveCandidates();
+            _discoveryForm?.RefreshRows(_sourceCandidates);
+            if (summary is not null)
+            {
+                var text = $"Repositories untersucht: {summary.Repositories}\n" +
+                    $"Mögliche Quellen: {summary.Found}\nNeue Quellen: {summary.New}\n" +
+                    $"Bereits bekannte Quellen: {summary.Known}\nErfolgreich geprüft: {summary.Checked}\n" +
+                    $"Übernommen: {summary.Accepted}\nFehlerhaft: {summary.Failed}";
+                _discoveryForm?.ShowProgress(text.Replace('\n', ' '), false);
+                _status.Text = "Quellensuche beendet";
+                if (!automatic) MessageBox.Show(text, "Quellensuche abgeschlossen", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+        catch (RateLimitException ex)
+        {
+            _discoverySettings.NextAllowedUtc = ex.RetryAt ?? DateTimeOffset.UtcNow.AddMinutes(10);
+            _discoveryStore.SaveSettings(_discoverySettings);
+            _discoveryForm?.ShowProgress(ex.Message, false);
+            _status.Text = ex.Message;
+            if (!automatic) MessageBox.Show(ex.Message, "GitHub-Ratenbegrenzung", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            _discoveryForm?.ShowProgress("Quellensuche abgebrochen.", false);
+            _status.Text = "Quellensuche abgebrochen";
+        }
+        catch (Exception ex)
+        {
+            _discoveryForm?.ShowProgress("Fehler: " + ex.Message, false);
+            _status.Text = "Quellensuche fehlgeschlagen";
+            if (!automatic) MessageBox.Show(ex.Message, "Quellensuche", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            SaveCandidates();
+            _discoveryCancellation.Dispose();
+            _discoveryCancellation = null;
+            _discoveryForm?.ShowProgress(_status.Text ?? "Bereit", false);
+        }
+    }
+
+    internal async Task CheckSourceAsync(SourceCandidate candidate)
+    {
+        if (_discoveryCancellation is not null) return;
+        _discoveryCancellation = new CancellationTokenSource();
+        _discoveryProfile = SelectedProfile;
+        _discoveryForm?.ShowProgress("Ausgewählte Quelle prüfen…", true);
+        try
+        {
+            var hashes = _sourceCandidates.Where(c => !ReferenceEquals(c, candidate) && c.ContentHash.Length > 0)
+                .Select(c => c.ContentHash).ToHashSet(StringComparer.Ordinal);
+            var bots = (int)_concurrency.Value;
+            var timeout = TimeSpan.FromSeconds((double)_timeout.Value);
+            await Task.Run(() => _discoveryService.CheckAsync(candidate, hashes, bots,
+                timeout, _discoveryCancellation.Token));
+            SaveCandidates();
+            _discoveryForm?.RefreshRows();
+            _discoveryForm?.ShowProgress($"Prüfung beendet: {candidate.WorkingCount} von {candidate.SampleCount} Proxys funktionieren.", false);
+        }
+        catch (OperationCanceledException) { _discoveryForm?.ShowProgress("Prüfung abgebrochen.", false); }
+        finally { _discoveryCancellation.Dispose(); _discoveryCancellation = null; }
+    }
+
+    private bool AcceptSourceCore(SourceCandidate candidate)
+    {
+        if (candidate.Status != CandidateStatus.Geprueft || candidate.ProxyCount == 0) return false;
+        if (!SourceRegistry.Add(SourcesPath, candidate)) return false;
+        candidate.Status = CandidateStatus.Uebernommen;
+        SaveCandidates();
+        _discoveryForm?.RefreshRows();
+        return true;
+    }
+
+    internal void AcceptSource(SourceCandidate candidate)
+    {
+        if (candidate.Status != CandidateStatus.Geprueft)
+        {
+            MessageBox.Show("Bitte die Quelle zuerst erfolgreich prüfen.", "Quellensuche", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        if (!DiscoveryPolicy.Suitable(candidate) && MessageBox.Show(
+            "Diese Quelle erfüllt die Grenzwerte für eine automatische Übernahme nicht. Trotzdem übernehmen?",
+            "Quellensuche", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        try
+        {
+            if (AcceptSourceCore(candidate)) OfferProxySearch();
+            else MessageBox.Show("Die Quelle ist bereits in sources.txt enthalten.", "Quellensuche", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "Quellensuche", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
+
+    internal void AcceptAllSources()
+    {
+        var count = 0;
+        try
+        {
+            foreach (var candidate in _sourceCandidates.Where(DiscoveryPolicy.Suitable).ToArray())
+                if (AcceptSourceCore(candidate)) count++;
+            MessageBox.Show($"{count} geeignete Quelle(n) übernommen.", "Quellensuche", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (count > 0) OfferProxySearch();
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "Quellensuche", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
+
+    private void OfferProxySearch()
+    {
+        if (MessageBox.Show("Jetzt mit den aktuellen Programmeinstellungen nach neuen Proxys suchen?",
+            "Quellensuche", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            _ = StartAsync(true);
     }
 
     private void SetRunning(bool running)

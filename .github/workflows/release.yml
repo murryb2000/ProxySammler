@@ -1,0 +1,46 @@
+name: Build ProxySammler 1.8.0
+on:
+  push:
+    branches: [main]
+    tags: ['v1.8.0']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        run: |
+          dotnet restore ProxySammler.Tests/ProxySammler.Tests.csproj
+          dotnet restore ProxySammler/ProxySammler.csproj -r win-x64
+      - name: Run all tests
+        run: dotnet run --project ProxySammler.Tests/ProxySammler.Tests.csproj -c Release --no-restore
+      - name: Publish single-file Windows x64 executable
+        run: dotnet publish ProxySammler/ProxySammler.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o release/publish
+      - name: Build portable package
+        shell: pwsh
+        run: |
+          Copy-Item release/publish/ProxySammler.exe release/ProxySammler-1.8.0-Windows-x64.exe
+          New-Item -ItemType Directory -Force release/package | Out-Null
+          Copy-Item release/ProxySammler-1.8.0-Windows-x64.exe release/package/
+          Copy-Item README.txt release/package/
+          Copy-Item ProxySammler/sources.txt release/package/
+          Compress-Archive -Path release/package/* -DestinationPath release/ProxySammler-1.8.0-Windows-x64-portable.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProxySammler-1.8.0-Windows-x64
+          path: |
+            release/ProxySammler-1.8.0-Windows-x64.exe
+            release/ProxySammler-1.8.0-Windows-x64-portable.zip
+      - name: Create GitHub Release
+        if: github.ref == 'refs/tags/v1.8.0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create $env:GITHUB_REF_NAME release/ProxySammler-1.8.0-Windows-x64.exe release/ProxySammler-1.8.0-Windows-x64-portable.zip --title 'ProxySammler 1.8.0' --notes 'Neue automatische GitHub-Quellensuche mit sicherer URL-Prüfung, Stichproben und Qualitätsbewertung. Kandidaten können geprüft und manuell oder optional automatisch übernommen werden. Die bisherige Proxy-Suche bleibt erhalten.'

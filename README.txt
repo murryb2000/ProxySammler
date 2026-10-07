@@ -1,4 +1,4 @@
-PROXYSAMMLER 1.7
+PROXYSAMMLER 1.8.0
 ================
 
 Portable Windows-Anwendung zum Sammeln und Prüfen freier HTTP-, SOCKS4- und
@@ -92,6 +92,43 @@ Die Datei sources.txt kann über "Quellen bearbeiten" geöffnet werden. Format:
   protokoll|https://adresse/zur/liste.txt
 
 Erlaubte Protokolle: http, socks4, socks5
+
+NEUE QUELLEN FINDEN
+-------------------
+Der Button "Neue Quellen finden" öffnet ein eigenes Verwaltungsfenster. Die
+GitHub-Suche durchsucht kürzlich aktualisierte öffentliche Repositories nach
+Proxylisten und Links in README-Dateien. Ein API-Schlüssel ist nicht nötig.
+Optional kann GITHUB_TOKEN als Umgebungsvariable für höhere GitHub-Limits
+gesetzt werden. Bei einer Ratenbegrenzung zeigt das Programm den nächsten
+möglichen Zeitpunkt an.
+
+Gefundene Quellen werden höchstens 8 MB groß heruntergeladen, auf Proxyformate
+untersucht und mit höchstens 12 Proxyadressen anhand der normalen Prüfroutine
+getestet. Kandidaten und Einstellungen stehen getrennt in source_candidates.json
+und source_discovery_settings.json. Beschädigte JSON-Dateien werden beim Start
+ignoriert. "Ausgewählte Quelle prüfen" wiederholt den Test. Nur geprüfte Quellen
+können manuell übernommen werden. "Alle geeigneten Quellen übernehmen" nutzt
+die Bewertung und verlangt mindestens einen funktionierenden Proxy. Die
+automatische Übernahme ist beim ersten Start ausgeschaltet.
+
+Die automatische Quellensuche läuft nur bei geöffnetem Programm, täglich oder
+wöchentlich. Sie ist unabhängig von der stündlichen Proxy-Suche. Eine neue
+Quelle wird ohne doppelte URL an sources.txt angehängt; die bisherige Datei
+bleibt zusätzlich als sources.txt.bak erhalten. Eigene Quellen werden nie
+automatisch gelöscht. Nach manueller Übernahme kann "Neue Proxys suchen"
+sofort mit den aktuellen Einstellungen gestartet werden.
+
+Bewertung (0–100 Punkte): Erreichbarkeit 20, eindeutige Adressen bis 20,
+funktionierende Proxys bis 20, Erfolgsquote bis 20, Aktualität (30 Tage) 10.
+Abzüge: doppelter Inhalt 25, bekannte Quelle 20, wiederholte Fehler bis 30.
+Automatische Übernahme ab 45 Punkten und mindestens einem funktionierenden
+Treffer. Eine niedrige Erfolgsquote allein schließt eine Quelle nicht aus.
+
+Für automatisch entdeckte URLs werden nur HTTP/HTTPS und öffentliche IPv4-Ziele
+zugelassen. DNS-Auflösung und Weiterleitungen werden erneut geprüft. Lokale,
+private und reservierte Ziele sind auch aus Proxy-Stichproben ausgeschlossen.
+IPv6-Ziele werden derzeit nicht
+abgerufen. Manuell eingetragene sources.txt-Quellen bleiben davon unberührt.
 
 SICHERHEIT
 ----------

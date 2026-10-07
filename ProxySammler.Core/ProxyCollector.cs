@@ -32,7 +32,7 @@ public sealed class ProxyCollector
 			AutomaticDecompression = DecompressionMethods.All
 		});
 		_http.Timeout = TimeSpan.FromSeconds(15.0);
-		_http.DefaultRequestHeaders.UserAgent.ParseAdd("ProxySammler/1.5");
+		_http.DefaultRequestHeaders.UserAgent.ParseAdd("ProxySammler/1.8.0");
 	}
 
 	public static IReadOnlyList<SourceDefinition> ReadSources(string path)

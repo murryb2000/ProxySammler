@@ -7,9 +7,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PlatformTarget>x64</PlatformTarget>
-    <Version>1.7.0</Version>
-    <FileVersion>1.7.0.0</FileVersion>
-    <AssemblyVersion>1.7.0.0</AssemblyVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../ProxySammler.Core/ProxySammler.Core.csproj" />
@@ -17,5 +14,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="sources.txt" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="sources.txt" LogicalName="ProxySammler.DefaultSources.txt" />
   </ItemGroup>
 </Project>
