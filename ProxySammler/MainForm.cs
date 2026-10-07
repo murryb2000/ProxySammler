@@ -1,0 +1,526 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using ProxySammler.Core;
+using ProxySammler.Persistence;
+
+namespace ProxySammler.App;
+
+public sealed class MainForm : Form
+{
+    private readonly CheckBox _http = new() { Text = "HTTP", Checked = true, AutoSize = true };
+    private readonly CheckBox _socks4 = new() { Text = "SOCKS4", Checked = true, AutoSize = true };
+    private readonly CheckBox _socks5 = new() { Text = "SOCKS5", Checked = true, AutoSize = true };
+    private readonly CheckBox _showErrors = new() { Text = "Fehler anzeigen", AutoSize = true };
+    private readonly CheckBox _turbo = new() { Text = "Turbo-Modus", Checked = true, AutoSize = true };
+    private readonly CheckBox _negativeCache = new() { Text = "Tote 6 Std. überspringen", Checked = true, AutoSize = true };
+    private readonly CheckBox _hourlySearch = new() { Text = "Stündlich automatisch neue Proxys suchen", AutoSize = true };
+    private readonly System.Windows.Forms.Timer _hourlyTimer = new() { Interval = 15_000 };
+    private DateTimeOffset? _nextHourlySearch;
+    private readonly ComboBox _profile = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
+    private readonly NumericUpDown _concurrency = new() { Minimum = 1, Maximum = 100, Value = 50, Width = 62 };
+    private readonly NumericUpDown _timeout = new() { Minimum = 2, Maximum = 30, Value = 8, Width = 62 };
+    private readonly Button _start = new() { Text = "Sammeln und prüfen", AutoSize = true, Height = 34 };
+    private readonly Button _newOnly = new() { Text = "Neue Proxys suchen", AutoSize = true, Height = 34 };
+    private readonly Button _retestLists = new() { Text = "Listen erneut prüfen", AutoSize = true, Height = 34 };
+    private readonly Button _stop = new() { Text = "Stopp", AutoSize = true, Height = 34, Enabled = false };
+    private readonly Button _clipboard = new() { Text = "IP:Port kopieren", AutoSize = true, Enabled = false };
+    private readonly Button _sources = new() { Text = "Quellen bearbeiten", AutoSize = true };
+    private readonly Button _folder = new() { Text = "Ergebnisordner", AutoSize = true };
+    private readonly DataGridView _grid = new();
+    private readonly BindingList<RowModel> _rows = new();
+    private readonly ProgressBar _progress = new() { Dock = DockStyle.Fill, Style = ProgressBarStyle.Continuous };
+    private readonly ToolStripStatusLabel _status = new() { Text = "Bereit" };
+    private readonly ToolStripStatusLabel _counts = new() { Spring = true, TextAlign = ContentAlignment.MiddleRight };
+    private readonly Label _phase = new() { Text = "Bereit", AutoEllipsis = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
+    private CancellationTokenSource? _cancellation;
+    private IReadOnlyList<ProxyTestResult> _allResults = Array.Empty<ProxyTestResult>();
+
+    private static string AppDirectory => AppContext.BaseDirectory;
+    private static string SourcesPath => Path.Combine(AppDirectory, "sources.txt");
+    private static string ResultsDirectory => Path.Combine(AppDirectory, "Ergebnisse");
+    private static string HistoryPath => Path.Combine(AppDirectory, "proxy_history.json");
+    private static string LegacyPoolDirectory => Path.Combine(AppDirectory, "Gefundene_Proxys");
+    private ProxyCheckProfile SelectedProfile => _profile.SelectedIndex == 1
+        ? ProxyCheckProfile.MacAttackCompatible : ProxyCheckProfile.SecureGeneric;
+
+    public MainForm()
+    {
+        Text = "ProxySammler 1.7";
+        StartPosition = FormStartPosition.CenterScreen;
+        AutoScaleMode = AutoScaleMode.Dpi;
+        MinimumSize = new Size(1220, 620);
+        Size = new Size(1280, 760);
+        Font = new Font("Segoe UI", 9F);
+        BackColor = Color.FromArgb(245, 247, 250);
+
+        Controls.Add(BuildLayout());
+        ConfigureGrid();
+        EnsureSourcesFile();
+        Directory.CreateDirectory(ResultsDirectory);
+        var initialStore = ProxyListStore.Load(ResultsDirectory, LegacyPoolDirectory);
+        initialStore.Save(ResultsDirectory);
+
+        _profile.Items.AddRange(new object[] { "Standard (HTTPS)", "MacAttack-kompatibel" });
+        _profile.SelectedIndex = 0;
+        _start.Click += async (_, _) => await StartAsync(false);
+        _newOnly.Click += async (_, _) => await StartAsync(true);
+        _retestLists.Click += async (_, _) => await RetestListsAsync();
+        _stop.Click += (_, _) => _cancellation?.Cancel();
+        _clipboard.Click += (_, _) => CopyToClipboard();
+        _sources.Click += (_, _) => OpenFile(SourcesPath);
+        _folder.Click += (_, _) => OpenFolder(ResultsDirectory);
+        _showErrors.CheckedChanged += (_, _) => RenderResults();
+        _profile.SelectedIndexChanged += (_, _) => ApplyProfile();
+        _hourlySearch.CheckedChanged += (_, _) =>
+        {
+            _nextHourlySearch = _hourlySearch.Checked ? DateTimeOffset.UtcNow.AddHours(1) : null;
+            _hourlyTimer.Enabled = _hourlySearch.Checked;
+            if (_hourlySearch.Checked)
+                _status.Text = "Automatische Suche aktiviert – erster Lauf in einer Stunde";
+            else if (_cancellation is null)
+                _status.Text = "Automatische Suche deaktiviert";
+        };
+        _hourlyTimer.Tick += async (_, _) =>
+        {
+            if (!_hourlySearch.Checked || _nextHourlySearch is null ||
+                DateTimeOffset.UtcNow < _nextHourlySearch || _cancellation is not null) return;
+            // Vor dem await verschieben: Timer-Ticks können keinen zweiten Lauf starten.
+            _nextHourlySearch = DateTimeOffset.UtcNow.AddHours(1);
+            await StartAsync(true, automatic: true);
+        };
+        FormClosing += (_, e) =>
+        {
+            if (_cancellation is { IsCancellationRequested: false })
+            {
+                var answer = MessageBox.Show("Die Prüfung läuft noch. Wirklich beenden?", "ProxySammler",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (answer != DialogResult.Yes) e.Cancel = true;
+                else _cancellation.Cancel();
+            }
+            if (!e.Cancel) _hourlyTimer.Stop();
+        };
+    }
+
+    private Control BuildLayout()
+    {
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 5, ColumnCount = 1 };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var title = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
+        title.Controls.Add(new Label { Text = "ProxySammler", Font = new Font("Segoe UI Semibold", 20F), AutoSize = true, ForeColor = Color.FromArgb(30, 41, 59) });
+        title.Controls.Add(new Label
+        {
+            Text = "Freie Proxys sammeln, prüfen und in drei aktuellen Listen speichern",
+            AutoSize = true, ForeColor = Color.FromArgb(71, 85, 105), Margin = new Padding(2, 0, 0, 10)
+        });
+        root.Controls.Add(title, 0, 0);
+
+        var toolbar = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 3,
+            GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
+            Padding = new Padding(10),
+            BackColor = Color.White,
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        toolbar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        toolbar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        toolbar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var optionsRow = FixedToolbarRow();
+        optionsRow.Controls.AddRange(new Control[]
+        {
+            _http, _socks4, _socks5, Spacer(8), LabelFor("Prüfprofil:"), _profile,
+            Spacer(8), LabelFor("Prüf-Bots:"), _concurrency, LabelFor("Timeout (s):"), _timeout,
+            _turbo, _negativeCache
+        });
+
+        var actionsRow = FixedToolbarRow();
+        actionsRow.Margin = new Padding(0, 6, 0, 0);
+        actionsRow.Controls.AddRange(new Control[]
+        {
+            _start, _newOnly, _retestLists, _stop, Spacer(8),
+            _showErrors, _clipboard, _sources, _folder
+        });
+
+        toolbar.Controls.Add(optionsRow, 0, 0);
+        toolbar.Controls.Add(actionsRow, 0, 1);
+        var automationRow = FixedToolbarRow();
+        automationRow.Margin = new Padding(0, 6, 0, 0);
+        automationRow.Controls.Add(_hourlySearch);
+        toolbar.Controls.Add(automationRow, 0, 2);
+        root.Controls.Add(toolbar, 0, 1);
+        root.Controls.Add(_grid, 0, 2);
+
+        var progressPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
+        progressPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
+        progressPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+        progressPanel.Controls.Add(_progress, 0, 0);
+        progressPanel.Controls.Add(_phase, 1, 0);
+        root.Controls.Add(progressPanel, 0, 3);
+
+        var strip = new StatusStrip { SizingGrip = false, BackColor = Color.White };
+        strip.Items.Add(_status);
+        strip.Items.Add(_counts);
+        root.Controls.Add(strip, 0, 4);
+        return root;
+    }
+
+    private void ConfigureGrid()
+    {
+        _grid.Dock = DockStyle.Fill;
+        _grid.BackgroundColor = Color.White;
+        _grid.BorderStyle = BorderStyle.FixedSingle;
+        _grid.AutoGenerateColumns = false;
+        _grid.ReadOnly = true;
+        _grid.AllowUserToAddRows = false;
+        _grid.AllowUserToDeleteRows = false;
+        _grid.AllowUserToResizeRows = false;
+        _grid.RowHeadersVisible = false;
+        _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _grid.MultiSelect = true;
+        _grid.DataSource = _rows;
+        _grid.Columns.Add(Column(nameof(RowModel.Protocol), "Protokoll", 85));
+        _grid.Columns.Add(Column(nameof(RowModel.Proxy), "Proxy", 190));
+        _grid.Columns.Add(Column(nameof(RowModel.Status), "Status", 80));
+        _grid.Columns.Add(Column(nameof(RowModel.ResponseTime), "Antwortzeit", 100));
+        _grid.Columns.Add(Column(nameof(RowModel.ExitIp), "Ausgangs-IP", 150));
+        var error = Column(nameof(RowModel.Error), "Fehler", 360);
+        error.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+        _grid.Columns.Add(error);
+        _grid.CellFormatting += (_, e) =>
+        {
+            if (e.RowIndex < 0) return;
+            var row = (RowModel)_grid.Rows[e.RowIndex].DataBoundItem;
+            _grid.Rows[e.RowIndex].DefaultCellStyle.ForeColor = row.IsWorking
+                ? Color.FromArgb(22, 101, 52) : Color.FromArgb(153, 27, 27);
+        };
+    }
+
+    private async Task StartAsync(bool onlyNew, bool automatic = false)
+    {
+        if (_cancellation is not null) return;
+        var protocols = SelectedProtocols(showWarning: !automatic);
+        if (automatic && protocols.Count == 0)
+            _status.Text = "Automatische Suche: kein Proxytyp ausgewählt";
+        if (protocols.Count == 0) return;
+        BeginRun(onlyNew ? "Suche nach neuen Proxys" : "Sammeln und prüfen");
+        try
+        {
+            var collector = new ProxyCollector();
+            var sources = ProxyCollector.ReadSources(SourcesPath);
+            var collection = await collector.CollectAsync(sources, protocols,
+                new Progress<string>(text => _phase.Text = text), _cancellation!.Token);
+            var failedSources = collection.Sources.Count(s => s.Error is not null);
+            if (!onlyNew && collection.Proxies.Count == 0)
+                throw new InvalidOperationException("Es wurden keine Kandidaten geladen. Die vorhandenen Listen wurden nicht verändert.");
+            var history = ProxyHistory.Load(HistoryPath);
+            int skipped;
+            IReadOnlyList<ProxyEndpoint> candidates = onlyNew
+                ? history.SelectNew(collection.Proxies, out skipped)
+                : history.Prepare(collection.Proxies, _negativeCache.Checked, TimeSpan.FromHours(6), out skipped);
+
+            var initialResults = await CheckCandidatesAsync(candidates,
+                onlyNew ? "Neue Kandidaten" : "Prüfung");
+            history.Update(initialResults);
+
+            var store = ProxyListStore.Load(ResultsDirectory, LegacyPoolDirectory);
+            if (onlyNew)
+            {
+                var added = store.AddWorking(initialResults);
+                var fullList = store.Select(protocols);
+                _allResults = await CheckCandidatesAsync(fullList, "Gesamtliste erneut prüfen");
+                history.Update(_allResults);
+
+                var working = _allResults.Count(r => r.IsWorking);
+                if (fullList.Count > 0 && working == 0)
+                    throw new InvalidOperationException("Bei der Nachprüfung wurde kein Proxy bestätigt. Die vorhandenen Listen wurden zum Schutz nicht überschrieben. Bitte Internetverbindung und Testziel prüfen.");
+
+                var removed = store.ReplaceSelected(protocols, _allResults);
+                store.Save(ResultsDirectory);
+                history.Save(HistoryPath);
+                CompleteRun($"{working:N0} aktuell funktionierende Proxys", failedSources);
+                if (!automatic) MessageBox.Show(
+                    $"Suche nach neuen Proxys abgeschlossen.\n\nNeue Treffer angehängt: {added:N0}\n" +
+                    $"Gesamtliste geprüft: {fullList.Count:N0}\nTote Proxys entfernt: {removed:N0}\n" +
+                    $"Aktuell funktionierend: {working:N0}\nBereits bekannte Kandidaten ausgelassen: {skipped:N0}\n\n" +
+                    $"Listen:\n{ResultsDirectory}", "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                _allResults = initialResults;
+                store.ReplaceSelected(protocols, _allResults);
+                store.Save(ResultsDirectory);
+                history.Save(HistoryPath);
+                var working = _allResults.Count(r => r.IsWorking);
+                CompleteRun($"{working:N0} funktionierende Proxys", failedSources);
+                if (!automatic) MessageBox.Show(
+                    $"Prüfung abgeschlossen.\n\nFunktionierend: {working:N0} von {_allResults.Count:N0}\n" +
+                    $"Negativcache übersprungen: {skipped:N0}\n\nListen:\n{ResultsDirectory}",
+                    "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            RenderResults();
+        }
+        catch (OperationCanceledException)
+        {
+            _status.Text = "Abgebrochen";
+            _phase.Text = "Prüfung wurde gestoppt; die dauerhaften Listen wurden nicht verändert.";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Fehler";
+            _phase.Text = ex.Message;
+            if (!automatic) MessageBox.Show(ex.Message, "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally { EndRun(); }
+    }
+
+    private async Task RetestListsAsync()
+    {
+        var protocols = SelectedProtocols();
+        if (protocols.Count == 0) return;
+        var store = ProxyListStore.Load(ResultsDirectory, LegacyPoolDirectory);
+        var candidates = store.Select(protocols);
+        if (candidates.Count == 0)
+        {
+            MessageBox.Show("Für die ausgewählten Proxytypen enthalten die drei Listen noch keine Einträge.",
+                "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        if (MessageBox.Show($"{candidates.Count:N0} gespeicherte Proxys erneut prüfen?\n\nTote Einträge werden anschließend entfernt.",
+                "Listen erneut prüfen", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+
+        BeginRun("Listen erneut prüfen");
+        try
+        {
+            _allResults = await CheckCandidatesAsync(candidates, "Gespeicherte Listen");
+            var working = _allResults.Count(r => r.IsWorking);
+            if (candidates.Count > 0 && working == 0)
+                throw new InvalidOperationException("Kein Proxy wurde bestätigt. Die vorhandenen Listen wurden zum Schutz nicht überschrieben.");
+            var removed = store.ReplaceSelected(protocols, _allResults);
+            store.Save(ResultsDirectory);
+            var history = ProxyHistory.Load(HistoryPath);
+            history.Update(_allResults);
+            history.Save(HistoryPath);
+            RenderResults();
+            CompleteRun($"{working:N0} weiterhin funktionierend – {removed:N0} entfernt", 0);
+            MessageBox.Show($"Listenprüfung abgeschlossen.\n\nWeiterhin funktionierend: {working:N0}\n" +
+                $"Tote Proxys entfernt: {removed:N0}\n\nListen:\n{ResultsDirectory}",
+                "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            _status.Text = "Abgebrochen";
+            _phase.Text = "Die Listen wurden nicht verändert.";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Fehler";
+            _phase.Text = ex.Message;
+            MessageBox.Show(ex.Message, "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally { EndRun(); }
+    }
+
+    private async Task<IReadOnlyList<ProxyTestResult>> CheckCandidatesAsync(IReadOnlyCollection<ProxyEndpoint> candidates, string label)
+    {
+        if (candidates.Count == 0) return Array.Empty<ProxyTestResult>();
+        _rows.Clear();
+        _progress.Value = 0;
+        var live = new List<ProxyTestResult>();
+        var checker = new ProxyChecker(profile: SelectedProfile);
+        var resultProgress = new Progress<ProxyTestResult>(result =>
+        {
+            live.Add(result);
+            if (result.IsWorking || _showErrors.Checked) _rows.Add(RowModel.From(result));
+            UpdateCounts(live);
+        });
+        if (_turbo.Checked)
+        {
+            var phases = new Progress<CheckProgress>(value =>
+            {
+                _progress.Maximum = Math.Max(1, value.Total);
+                _progress.Value = Math.Min(value.Done, _progress.Maximum);
+                _phase.Text = $"{label} – {value.Phase}: {value.Done:N0} von {value.Total:N0}";
+            });
+            return await checker.CheckAllTurboAsync(candidates, (int)_concurrency.Value,
+                TimeSpan.FromSeconds((double)_timeout.Value), TimeSpan.FromSeconds(1),
+                resultProgress, phases, _cancellation!.Token);
+        }
+
+        var counts = new Progress<(int done, int total)>(value =>
+        {
+            _progress.Maximum = Math.Max(1, value.total);
+            _progress.Value = Math.Min(value.done, _progress.Maximum);
+            _phase.Text = $"{label}: {value.done:N0} von {value.total:N0}";
+        });
+        return await checker.CheckAllAsync(candidates, (int)_concurrency.Value,
+            TimeSpan.FromSeconds((double)_timeout.Value), resultProgress, counts, _cancellation!.Token);
+    }
+
+    private HashSet<ProxyProtocol> SelectedProtocols(bool showWarning = true)
+    {
+        var protocols = new HashSet<ProxyProtocol>();
+        if (_http.Checked) protocols.Add(ProxyProtocol.Http);
+        if (_socks4.Checked) protocols.Add(ProxyProtocol.Socks4);
+        if (_socks5.Checked) protocols.Add(ProxyProtocol.Socks5);
+        if (showWarning && protocols.Count == 0)
+            MessageBox.Show("Bitte mindestens einen Proxytyp auswählen.", "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        return protocols;
+    }
+
+    private void BeginRun(string title)
+    {
+        SetRunning(true);
+        _allResults = Array.Empty<ProxyTestResult>();
+        _rows.Clear();
+        _progress.Value = 0;
+        _cancellation = new CancellationTokenSource();
+        _status.Text = title;
+        _phase.Text = "Vorbereitung…";
+    }
+
+    private void EndRun()
+    {
+        _cancellation?.Dispose();
+        _cancellation = null;
+        SetRunning(false);
+    }
+
+    private void CompleteRun(string text, int failedSources)
+    {
+        _status.Text = "Fertig";
+        _phase.Text = text;
+        _counts.Text = failedSources > 0 ? $"{failedSources} Quelle(n) nicht erreichbar" : _counts.Text;
+    }
+
+    private void RenderResults()
+    {
+        _rows.RaiseListChangedEvents = false;
+        _rows.Clear();
+        foreach (var result in _allResults.Where(r => r.IsWorking || _showErrors.Checked)) _rows.Add(RowModel.From(result));
+        _rows.RaiseListChangedEvents = true;
+        _rows.ResetBindings();
+        UpdateCounts(_allResults);
+    }
+
+    private void UpdateCounts(IEnumerable<ProxyTestResult> results)
+    {
+        var array = results as ProxyTestResult[] ?? results.ToArray();
+        _counts.Text = $"Geprüft: {array.Length:N0}   |   OK: {array.Count(r => r.IsWorking):N0}";
+    }
+
+    private void CopyToClipboard()
+    {
+        var text = ExportService.ToIpPortText(_allResults);
+        if (text.Length == 0)
+        {
+            MessageBox.Show("Es sind keine funktionierenden Proxys zum Kopieren vorhanden.", "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        try
+        {
+            Clipboard.SetText(text);
+            _status.Text = $"{text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries).Length:N0} Proxys kopiert";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Zwischenablage", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void ApplyProfile()
+    {
+        var macAttack = SelectedProfile == ProxyCheckProfile.MacAttackCompatible;
+        if (macAttack)
+        {
+            _http.Checked = true;
+            _socks4.Checked = false;
+            _socks5.Checked = false;
+            _timeout.Value = 30;
+            _turbo.Checked = false;
+        }
+        else if (_timeout.Value == 30) _timeout.Value = 8;
+        _socks4.Enabled = _socks5.Enabled = !macAttack;
+        _turbo.Enabled = !macAttack;
+    }
+
+    private void SetRunning(bool running)
+    {
+        _start.Enabled = _newOnly.Enabled = _retestLists.Enabled = !running;
+        _stop.Enabled = running;
+        _clipboard.Enabled = !running && _allResults.Any(r => r.IsWorking);
+        _http.Enabled = !running;
+        _socks4.Enabled = _socks5.Enabled = !running && SelectedProfile == ProxyCheckProfile.SecureGeneric;
+        _profile.Enabled = !running;
+        _concurrency.Enabled = _timeout.Enabled = _negativeCache.Enabled = !running;
+        _turbo.Enabled = !running && SelectedProfile == ProxyCheckProfile.SecureGeneric;
+        _sources.Enabled = _folder.Enabled = !running;
+    }
+
+    private static void EnsureSourcesFile()
+    {
+        if (!File.Exists(SourcesPath)) File.WriteAllText(SourcesPath, DefaultSources.Text, new System.Text.UTF8Encoding(false));
+    }
+
+    private static void OpenFile(string path)
+    {
+        try { Process.Start(new ProcessStartInfo("notepad.exe", $"\"{path}\"") { UseShellExecute = true }); }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
+
+    private static void OpenFolder(string path)
+    {
+        Directory.CreateDirectory(path);
+        try { Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true }); }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
+
+    private static DataGridViewTextBoxColumn Column(string property, string title, int width) => new()
+    {
+        DataPropertyName = property, HeaderText = title, Width = width, SortMode = DataGridViewColumnSortMode.Automatic
+    };
+
+    private static Label LabelFor(string text) => new() { Text = text, AutoSize = true, Margin = new Padding(8, 7, 2, 0) };
+    private static Control Spacer(int width) => new Panel { Width = width, Height = 1 };
+    private static FlowLayoutPanel FixedToolbarRow() => new()
+    {
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        FlowDirection = FlowDirection.LeftToRight,
+        WrapContents = false,
+        Margin = Padding.Empty,
+        Padding = Padding.Empty
+    };
+
+    private sealed class RowModel
+    {
+        public required string Protocol { get; init; }
+        public required string Proxy { get; init; }
+        public required string Status { get; init; }
+        public required string ResponseTime { get; init; }
+        public required string ExitIp { get; init; }
+        public required string Error { get; init; }
+        public bool IsWorking { get; init; }
+
+        public static RowModel From(ProxyTestResult result) => new()
+        {
+            Protocol = result.Proxy.ProtocolName,
+            Proxy = result.Proxy.Address,
+            Status = result.IsWorking ? "OK" : "Fehler",
+            ResponseTime = result.IsWorking ? $"{result.ResponseTimeMs} ms" : "–",
+            ExitIp = result.ExitIp,
+            Error = result.Error,
+            IsWorking = result.IsWorking
+        };
+    }
+}

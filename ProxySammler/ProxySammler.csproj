@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <Version>1.7.0</Version>
+    <FileVersion>1.7.0.0</FileVersion>
+    <AssemblyVersion>1.7.0.0</AssemblyVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProxySammler.Core/ProxySammler.Core.csproj" />
+    <ProjectReference Include="../ProxySammler.Persistence/ProxySammler.Persistence.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="sources.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

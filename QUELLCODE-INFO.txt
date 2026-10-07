@@ -1,0 +1,31 @@
+ProxySammler 1.7 – Quellcode
+=============================
+
+Enthalten sind:
+
+- ProxySammler: Windows-Oberfläche und Programmsteuerung
+- ProxySammler.Core: Sammeln, Erkennen und Prüfen der Proxys
+- ProxySammler.Persistence: Verwaltung der drei dauerhaften Proxylisten
+- ProxySammler.Tests: Projekttests
+- ProxySammler/sources.txt: Standardquellen
+- build-release.sh: Skript zum Testen und Erstellen des portablen Windows-Pakets
+
+Voraussetzungen:
+
+- .NET 8 SDK
+- Für die Windows-Oberfläche: Windows x64
+
+Kompilieren:
+
+dotnet build ProxySammler/ProxySammler.csproj -c Release
+
+Tests starten:
+
+dotnet run --project ProxySammler.Tests/ProxySammler.Tests.csproj -c Release
+
+Portables Paket unter Linux, WSL oder Git Bash erzeugen:
+
+./build-release.sh
+
+Das Paket enthält den vollständigen C#-Quellcode und benötigt keine Dateien
+außerhalb dieses Ordners.
