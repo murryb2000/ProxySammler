@@ -32,7 +32,7 @@ public sealed class ProxyCollector
 			AutomaticDecompression = DecompressionMethods.All
 		});
 		_http.Timeout = TimeSpan.FromSeconds(15.0);
-		_http.DefaultRequestHeaders.UserAgent.ParseAdd("ProxySammler/1.8.0");
+		_http.DefaultRequestHeaders.UserAgent.ParseAdd("ProxySammler/1.8.1");
 	}
 
 	public static IReadOnlyList<SourceDefinition> ReadSources(string path)
@@ -59,7 +59,7 @@ public sealed class ProxyCollector
 
 	public async Task<CollectionResult> CollectAsync(IEnumerable<SourceDefinition> sources, ISet<ProxyProtocol> enabledProtocols, IProgress<string>? progress, CancellationToken cancellationToken)
 	{
-		SourceDefinition[] selected = sources.Where((SourceDefinition s) => enabledProtocols.Contains(s.Protocol)).ToArray();
+		SourceDefinition[] selected = sources.ToArray();
 		ConcurrentBag<SourceResult> sourceResults = new ConcurrentBag<SourceResult>();
 		ConcurrentDictionary<string, ProxyEndpoint> unique = new ConcurrentDictionary<string, ProxyEndpoint>(StringComparer.OrdinalIgnoreCase);
 		await Parallel.ForEachAsync(selected, new ParallelOptions
@@ -94,7 +94,7 @@ public sealed class ProxyCollector
 						throw new InvalidDataException("Quelle ist größer als 8 MB.");
 					}
 				}
-				ProxyEndpoint[] array = Extract(text.ToString(), source.Protocol).Take(100000).ToArray();
+				ProxyEndpoint[] array = SourceFormats.Extract(text.ToString(), source.Protocol).Where(p => enabledProtocols.Contains(p.Protocol)).ToArray();
 				ProxyEndpoint[] array2 = array;
 				foreach (ProxyEndpoint proxyEndpoint in array2)
 				{

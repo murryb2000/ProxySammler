@@ -55,7 +55,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "ProxySammler 1.8.0";
+        Text = "ProxySammler 1.8.1";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(1450, 620);
@@ -99,7 +99,8 @@ public sealed class MainForm : Form
         _hourlyTimer.Tick += async (_, _) =>
         {
             if (!_hourlySearch.Checked || _nextHourlySearch is null ||
-                DateTimeOffset.UtcNow < _nextHourlySearch || _cancellation is not null) return;
+                DateTimeOffset.UtcNow < _nextHourlySearch || _cancellation is not null ||
+                _discoveryCancellation is not null) return;
             // Vor dem await verschieben: Timer-Ticks können keinen zweiten Lauf starten.
             _nextHourlySearch = DateTimeOffset.UtcNow.AddHours(1);
             await StartAsync(true, automatic: true);
@@ -238,7 +239,7 @@ public sealed class MainForm : Form
 
     private async Task StartAsync(bool onlyNew, bool automatic = false)
     {
-        if (_cancellation is not null) return;
+        if (_cancellation is not null || _discoveryCancellation is not null) return;
         var protocols = SelectedProtocols(showWarning: !automatic);
         if (automatic && protocols.Count == 0)
             _status.Text = "Automatische Suche: kein Proxytyp ausgewählt";
@@ -256,7 +257,7 @@ public sealed class MainForm : Form
             var history = ProxyHistory.Load(HistoryPath);
             int skipped;
             IReadOnlyList<ProxyEndpoint> candidates = onlyNew
-                ? history.SelectNew(collection.Proxies, out skipped)
+                ? history.SelectNew(collection.Proxies, out skipped, _negativeCache.Checked, TimeSpan.FromHours(6))
                 : history.Prepare(collection.Proxies, _negativeCache.Checked, TimeSpan.FromHours(6), out skipped);
 
             var initialResults = await CheckCandidatesAsync(candidates,
@@ -316,6 +317,7 @@ public sealed class MainForm : Form
 
     private async Task RetestListsAsync()
     {
+        if (_cancellation is not null || _discoveryCancellation is not null) return;
         var protocols = SelectedProtocols();
         if (protocols.Count == 0) return;
         var store = ProxyListStore.Load(ResultsDirectory, LegacyPoolDirectory);
@@ -410,11 +412,11 @@ public sealed class MainForm : Form
 
     private void BeginRun(string title)
     {
-        SetRunning(true);
         _allResults = Array.Empty<ProxyTestResult>();
         _rows.Clear();
         _progress.Value = 0;
         _cancellation = new CancellationTokenSource();
+        SetRunning(true);
         _status.Text = title;
         _phase.Text = "Vorbereitung…";
     }
@@ -507,13 +509,14 @@ public sealed class MainForm : Form
 
     internal async Task DiscoverAsync(bool automatic)
     {
-        if (_discoveryCancellation is not null || _discoveryService.IsRunning) return;
+        if (_cancellation is not null || _discoveryCancellation is not null || _discoveryService.IsRunning) return;
         if (_discoverySettings.NextAllowedUtc is { } retry && DateTimeOffset.UtcNow < retry)
         {
             _discoveryForm?.ShowProgress($"GitHub begrenzt die Suche. Erneut möglich ab {retry.ToLocalTime():g}.", false);
             return;
         }
         _discoveryCancellation = new CancellationTokenSource();
+        SetRunning(true);
         _discoveryProfile = SelectedProfile;
         _discoverySettings.LastSearchUtc = DateTimeOffset.UtcNow;
         _discoveryStore.SaveSettings(_discoverySettings);
@@ -577,14 +580,16 @@ public sealed class MainForm : Form
             SaveCandidates();
             _discoveryCancellation.Dispose();
             _discoveryCancellation = null;
+            SetRunning(_cancellation is not null);
             _discoveryForm?.ShowProgress(_status.Text ?? "Bereit", false);
         }
     }
 
     internal async Task CheckSourceAsync(SourceCandidate candidate)
     {
-        if (_discoveryCancellation is not null) return;
+        if (_cancellation is not null || _discoveryCancellation is not null) return;
         _discoveryCancellation = new CancellationTokenSource();
+        SetRunning(true);
         _discoveryProfile = SelectedProfile;
         _discoveryForm?.ShowProgress("Ausgewählte Quelle prüfen…", true);
         try
@@ -600,7 +605,13 @@ public sealed class MainForm : Form
             _discoveryForm?.ShowProgress($"Prüfung beendet: {candidate.WorkingCount} von {candidate.SampleCount} Proxys funktionieren.", false);
         }
         catch (OperationCanceledException) { _discoveryForm?.ShowProgress("Prüfung abgebrochen.", false); }
-        finally { _discoveryCancellation.Dispose(); _discoveryCancellation = null; }
+        finally
+        {
+            _discoveryCancellation.Dispose();
+            _discoveryCancellation = null;
+            SetRunning(false);
+            _discoveryForm?.ShowProgress(_status.Text ?? "Bereit", false);
+        }
     }
 
     private bool AcceptSourceCore(SourceCandidate candidate)
@@ -654,7 +665,8 @@ public sealed class MainForm : Form
     private void SetRunning(bool running)
     {
         _start.Enabled = _newOnly.Enabled = _retestLists.Enabled = !running;
-        _stop.Enabled = running;
+        _stop.Enabled = _cancellation is not null;
+        _discover.Enabled = _cancellation is null;
         _clipboard.Enabled = !running && _allResults.Any(r => r.IsWorking);
         _http.Enabled = !running;
         _socks4.Enabled = _socks5.Enabled = !running && SelectedProfile == ProxyCheckProfile.SecureGeneric;

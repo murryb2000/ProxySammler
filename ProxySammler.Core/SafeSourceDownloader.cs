@@ -91,7 +91,7 @@ public sealed class SafeSourceDownloader : IDisposable
             }
         };
         _client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
-        _client.DefaultRequestHeaders.UserAgent.ParseAdd("ProxySammler/1.8.0");
+        _client.DefaultRequestHeaders.UserAgent.ParseAdd("ProxySammler/1.8.1");
         _client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
     }
 

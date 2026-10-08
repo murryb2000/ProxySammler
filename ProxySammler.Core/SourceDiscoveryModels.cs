@@ -24,6 +24,7 @@ public sealed class SourceCandidate
     public DateTimeOffset? UpdatedUtc { get; set; }
     public int ProxyCount { get; set; }
     public int SampleCount { get; set; }
+    public int SampleRound { get; set; }
     public int WorkingCount { get; set; }
     public double SuccessRate => SampleCount == 0 ? 0 : (double)WorkingCount / SampleCount;
     public int Quality { get; set; }
@@ -43,6 +44,7 @@ public static class DiscoveryPolicy
 {
     public const int MaxDownloadBytes = 8 * 1024 * 1024;
     public const int MaxSampleSize = 12;
+    public const int MaxSampleTotalSize = 36;
     public const int MaxParallelSources = 3;
     public const int MaxRedirects = 3;
     public const int AutoAcceptMinimumWorking = 1;

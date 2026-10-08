@@ -14,12 +14,13 @@ public sealed class SourceDiscoveryForm : Form
     private readonly CheckBox _automatic = new() { Text = "Automatisch nach neuen Quellen suchen", AutoSize = true };
     private readonly CheckBox _acceptAutomatically = new() { Text = "Gute Quellen automatisch übernehmen", AutoSize = true };
     private readonly ComboBox _interval = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
+    private readonly List<Button> _actions = new();
     private readonly Label _status = new() { Text = "Bereit", AutoEllipsis = true, Dock = DockStyle.Fill };
 
     public SourceDiscoveryForm(MainForm main, IReadOnlyCollection<SourceCandidate> candidates, DiscoverySettings settings)
     {
         _main = main;
-        Text = "Neue Quellen finden – ProxySammler 1.8.0";
+        Text = "Neue Quellen finden – ProxySammler 1.8.1";
         Size = new Size(1300, 650);
         MinimumSize = new Size(950, 480);
         StartPosition = FormStartPosition.CenterParent;
@@ -64,6 +65,7 @@ public sealed class SourceDiscoveryForm : Form
             var button = new Button { Text = text, AutoSize = true };
             button.Click += (_, _) => action();
             actions.Controls.Add(button);
+            _actions.Add(button);
             return button;
         }
         Button("Ausgewählte Quelle prüfen", async () => { if (Selected is { } c) await _main.CheckSourceAsync(c); });
@@ -112,6 +114,7 @@ public sealed class SourceDiscoveryForm : Form
         _status.Text = text;
         _search.Enabled = !running;
         _cancel.Enabled = running;
+        foreach (var button in _actions) button.Enabled = !running;
         RefreshRows();
     }
 }

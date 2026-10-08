@@ -12,7 +12,7 @@ using ProxySammler.Persistence;
 var failures = new List<string>();
 void Assert(bool condition, string message) { if (!condition) failures.Add(message); }
 
-var temp = Path.Combine(Path.GetTempPath(), "ProxySammler-1.8.0-Test-" + Guid.NewGuid().ToString("N"));
+var temp = Path.Combine(Path.GetTempPath(), "ProxySammler-1.8.1-Test-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);
 try
 {
@@ -68,6 +68,43 @@ try
         .Single().Protocol == ProxyProtocol.Socks4, "JSON-Objekte müssen als Proxy erkannt werden.");
     Assert(SourceFormats.NormalizeUrl("HTTPS://EXAMPLE.COM/list.txt") ==
         SourceFormats.NormalizeUrl("https://example.com/list.txt"), "URL-Normalisierung muss Duplikate erkennen.");
+
+    // Exercise the actual collection path after a discovered source is registered.
+    using (var client = new HttpClient(new ReplyHandler(request => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent(request.RequestUri!.AbsolutePath.EndsWith("csv")
+            ? "ip,port,protocol\n8.8.8.8,8080,http\n9.9.9.9,1080,socks5"
+            : "[{\"ip\":\"1.1.1.1\",\"port\":1080,\"type\":\"socks4\"}]")
+    })))
+    {
+        var collector = new ProxyCollector(client);
+        var all = new HashSet<ProxyProtocol> { ProxyProtocol.Http, ProxyProtocol.Socks4, ProxyProtocol.Socks5 };
+        var sources = new[] { new SourceDefinition(ProxyProtocol.Http, "https://example.com/proxies.csv"),
+            new SourceDefinition(ProxyProtocol.Http, "https://example.com/proxies.json") };
+        var collection = await collector.CollectAsync(sources, all, null, CancellationToken.None);
+        Assert(collection.Proxies.Count == 3 && collection.Sources.All(x => x.Error is null),
+            "Übernommene CSV-/JSON-Quellen müssen in der normalen Suche Kandidaten liefern.");
+        var socksOnly = await collector.CollectAsync(sources, new HashSet<ProxyProtocol> { ProxyProtocol.Socks5 }, null, CancellationToken.None);
+        Assert(socksOnly.Proxies.Count == 1 && socksOnly.Proxies.Single().Protocol == ProxyProtocol.Socks5,
+            "Gemischte Quellen müssen auch bei abweichendem Quellentyp nur ausgewählte Protokolle liefern.");
+    }
+
+    var retryHistory = new ProxyHistory();
+    var recentDead = new ProxyEndpoint(ProxyProtocol.Http, "8.8.8.8", 80);
+    var oldDead = new ProxyEndpoint(ProxyProtocol.Http, "9.9.9.9", 80);
+    var knownWorking = new ProxyEndpoint(ProxyProtocol.Http, "1.1.1.1", 80);
+    retryHistory.Update(new[] {
+        new ProxyTestResult { Proxy = recentDead, IsWorking = false, CheckedAtUtc = DateTime.UtcNow },
+        new ProxyTestResult { Proxy = oldDead, IsWorking = false, CheckedAtUtc = DateTime.UtcNow.AddHours(-7) },
+        new ProxyTestResult { Proxy = knownWorking, IsWorking = true, CheckedAtUtc = DateTime.UtcNow }
+    });
+    var retryList = new[] { recentDead, oldDead, knownWorking };
+    var retry = retryHistory.SelectNew(retryList, out var retrySkipped);
+    Assert(retry.SequenceEqual(new[] { oldDead }) && retrySkipped == 2,
+        "Neue Suche muss frühere Fehler nach sechs Stunden erneut prüfen, bekannte Treffer nachprüfen lassen.");
+    retry = retryHistory.SelectNew(retryList, out retrySkipped, skipRecentFailures: false);
+    Assert(retry.Count == 2 && retry.Contains(recentDead) && retry.Contains(oldDead) && retrySkipped == 1,
+        "Ohne Negativcache müssen auch frisch ausgefallene Proxys erneut geprüft werden.");
 
     var candidate = new SourceCandidate { Url = "https://example.com/list.txt", Protocol = ProxyProtocol.Http,
         Status = CandidateStatus.Geprueft, Reachable = true, ProxyCount = 100, SampleCount = 12,
@@ -178,6 +215,70 @@ try
             "Private Proxyziele dürfen in automatisch entdeckten Listen nicht geprüft werden.");
     }
 
+    // A working proxy outside the first batch must still be found.
+    var sampleCalls = 0;
+    var listText = string.Join('\n', Enumerable.Range(1, 100).Select(i => $"8.8.8.{i}:8080"));
+    using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(_ =>
+        new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(listText) })))
+    {
+        var service = new SourceDiscoveryService(new BlockingProvider(), downloader, (proxies, _, _, _) =>
+        {
+            sampleCalls++;
+            Assert(proxies.Count <= DiscoveryPolicy.MaxSampleSize, "Stichproben-Batches dürfen maximal zwölf Proxys umfassen.");
+            return Task.FromResult<IReadOnlyList<ProxyTestResult>>(proxies.Select(p => new ProxyTestResult
+                { Proxy = p, IsWorking = p.Host == "8.8.8.3" }).ToArray());
+        });
+        var checkedCandidate = new SourceCandidate { Url = "https://public.example/proxies.txt" };
+        await service.CheckAsync(checkedCandidate, new HashSet<string>(), 1, TimeSpan.FromSeconds(1), CancellationToken.None);
+        Assert(sampleCalls == 2 && checkedCandidate.SampleCount == 24 && checkedCandidate.WorkingCount == 1,
+            "Nach zwölf erfolglosen Stichproben muss ein weiterer Teil der Liste geprüft werden.");
+    }
+    using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(_ =>
+        new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(listText) })))
+    {
+        var sampledHosts = new List<string>();
+        var service = new SourceDiscoveryService(new BlockingProvider(), downloader, (proxies, _, _, _) =>
+        {
+            sampledHosts.AddRange(proxies.Select(p => p.Host));
+            return Task.FromResult<IReadOnlyList<ProxyTestResult>>(proxies.Select(p => new ProxyTestResult
+                { Proxy = p, IsWorking = false }).ToArray());
+        });
+        var checkedCandidate = new SourceCandidate { Url = "https://public.example/proxies.txt" };
+        await service.CheckAsync(checkedCandidate, new HashSet<string>(), 1, TimeSpan.FromSeconds(1), CancellationToken.None);
+        Assert(checkedCandidate.SampleCount == 36 && checkedCandidate.WorkingCount == 0,
+            "Erweiterte Stichproben müssen bei 36 enden.");
+        var firstHosts = sampledHosts.ToHashSet();
+        Assert(firstHosts.Count == 36, "Erweiterte Stichproben müssen unterschiedliche Adressen prüfen.");
+        sampledHosts.Clear();
+        await service.CheckAsync(checkedCandidate, new HashSet<string>(), 1, TimeSpan.FromSeconds(1), CancellationToken.None);
+        Assert(!firstHosts.SetEquals(sampledHosts), "Wiederholte Stichproben müssen ihre Auswahl verschieben.");
+    }
+    // Existing failed candidates must recover on a later search without self-duplicate penalties.
+    using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(_ =>
+        new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("8.8.8.8:8080") })))
+    {
+        var service = new SourceDiscoveryService(new EmptyProvider(), downloader, (proxies, _, _, _) =>
+            Task.FromResult<IReadOnlyList<ProxyTestResult>>(proxies.Select(p => new ProxyTestResult
+                { Proxy = p, IsWorking = true }).ToArray()));
+        var recovering = new SourceCandidate { Url = "https://public.example/proxies.txt", Status = CandidateStatus.Fehlerhaft,
+            Reachable = true, ProxyCount = 99, SampleCount = 12, WorkingCount = 10, ContentHash = "old", ErrorCount = 3 };
+        var summary = await service.SearchAsync(new List<SourceCandidate> { recovering }, [], false, 1,
+            TimeSpan.FromSeconds(1), _ => Task.FromResult(false), null, CancellationToken.None);
+        Assert(summary?.Checked == 1 && recovering.Status == CandidateStatus.Geprueft &&
+            recovering.SampleCount == 1 && recovering.WorkingCount == 1 && !recovering.DuplicateContent && recovering.ErrorCount == 0,
+            "Fehlerhafte Kandidaten müssen erneut geprüft werden und veraltete Prüfdaten verlieren.");
+    }
+    using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(_ =>
+        new HttpResponseMessage(HttpStatusCode.NotFound))))
+    {
+        var service = new SourceDiscoveryService(new EmptyProvider(), downloader);
+        var stale = new SourceCandidate { Url = "https://public.example/proxies.txt", Reachable = true,
+            ProxyCount = 100, SampleCount = 12, WorkingCount = 12, ContentHash = "old" };
+        await service.CheckAsync(stale, new HashSet<string>(), 1, TimeSpan.FromSeconds(1), CancellationToken.None);
+        Assert(!stale.Reachable && stale.ProxyCount == 0 && stale.WorkingCount == 0 && stale.ContentHash == "" &&
+            stale.Status == CandidateStatus.Fehlerhaft, "Abruffehler dürfen keine alten Trefferzahlen anzeigen.");
+    }
+
     var gateProvider = new BlockingProvider();
     using (var downloader = new SafeSourceDownloader(resolver, new ReplyHandler(_ => new HttpResponseMessage(HttpStatusCode.OK))))
     {
@@ -203,7 +304,7 @@ if (failures.Count > 0)
     foreach (var failure in failures) Console.Error.WriteLine("- " + failure);
     return 1;
 }
-Console.WriteLine("Alle ProxySammler-1.8.0-Tests erfolgreich.");
+Console.WriteLine("Alle ProxySammler-1.8.1-Tests erfolgreich.");
 return 0;
 
 sealed class PublicResolver : IAddressResolver
@@ -234,4 +335,11 @@ sealed class BlockingProvider : ISourceDiscoveryProvider
         await Release.Task;
         return ([], 0);
     }
+}
+
+sealed class EmptyProvider : ISourceDiscoveryProvider
+{
+    public Task<(IReadOnlyList<DiscoveredLink> Links, int Repositories)> SearchAsync(
+        SafeSourceDownloader downloader, IProgress<string>? progress, CancellationToken cancellationToken) =>
+        Task.FromResult<(IReadOnlyList<DiscoveredLink>, int)>(([], 0));
 }

@@ -49,15 +49,19 @@ public sealed class SourceDiscoveryService
                 existing.Add(url);
             }
 
-            var hashes = candidates.Where(c => c.ContentHash.Length > 0)
-                .Select(c => c.ContentHash).ToHashSet(StringComparer.Ordinal);
+            var toCheck = added.Concat(candidates.Where(c => !added.Contains(c) &&
+                (c.Status == CandidateStatus.Neu || c.Status == CandidateStatus.Fehlerhaft ||
+                 (c.Status == CandidateStatus.Geprueft && c.WorkingCount == 0)) &&
+                !known.Contains(SourceFormats.NormalizeUrl(c.Url)))).ToArray();
             var checkedCount = 0;
             var failed = 0;
             var accepted = 0;
-            foreach (var candidate in added)
+            foreach (var candidate in toCheck)
             {
+                var hashes = candidates.Where(c => !ReferenceEquals(c, candidate) && c.ContentHash.Length > 0)
+                    .Select(c => c.ContentHash).ToHashSet(StringComparer.Ordinal);
                 cancellationToken.ThrowIfCancellationRequested();
-                progress?.Report($"Quelle prüfen ({checkedCount + failed + 1}/{added.Count}): {candidate.Url}");
+                progress?.Report($"Quelle prüfen ({checkedCount + failed + 1}/{toCheck.Length}): {candidate.Url}");
                 await CheckAsync(candidate, hashes, bots, timeout, cancellationToken);
                 if (candidate.Status == CandidateStatus.Fehlerhaft) failed++;
                 else checkedCount++;
@@ -72,6 +76,10 @@ public sealed class SourceDiscoveryService
     public async Task CheckAsync(SourceCandidate candidate, ISet<string> knownHashes, int bots,
         TimeSpan timeout, CancellationToken cancellationToken)
     {
+        candidate.Reachable = false;
+        candidate.ProxyCount = candidate.SampleCount = candidate.WorkingCount = 0;
+        candidate.DuplicateContent = false;
+        candidate.ContentHash = "";
         try
         {
             var download = await _downloader.GetAsync(candidate.Url, cancellationToken);
@@ -87,13 +95,21 @@ public sealed class SourceDiscoveryService
             candidate.ContentHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
             candidate.DuplicateContent = knownHashes.Contains(candidate.ContentHash);
             knownHashes.Add(candidate.ContentHash);
-            var sample = proxies.Length <= DiscoveryPolicy.MaxSampleSize ? proxies :
-                Enumerable.Range(0, DiscoveryPolicy.MaxSampleSize)
-                    .Select(i => proxies[(int)((long)i * proxies.Length / DiscoveryPolicy.MaxSampleSize)]).ToArray();
-            var results = await _check(sample, Math.Clamp(bots, 1, DiscoveryPolicy.MaxSampleSize), timeout, cancellationToken);
-            candidate.SampleCount = results.Count;
-            candidate.WorkingCount = results.Count(r => r.IsWorking);
+            var sampleSize = Math.Min(proxies.Length, DiscoveryPolicy.MaxSampleTotalSize);
+            var sampleOffset = candidate.SampleRound % proxies.Length;
+            candidate.SampleRound = (candidate.SampleRound + 1) % proxies.Length;
+            var sample = Enumerable.Range(0, sampleSize)
+                .OrderBy(i => i % 3).ThenBy(i => i)
+                .Select(i => proxies[(int)(((long)i * proxies.Length / sampleSize + sampleOffset) % proxies.Length)]).ToArray();
+            foreach (var batch in sample.Chunk(DiscoveryPolicy.MaxSampleSize))
+            {
+                var results = await _check(batch, Math.Clamp(bots, 1, DiscoveryPolicy.MaxSampleSize), timeout, cancellationToken);
+                candidate.SampleCount += results.Count;
+                candidate.WorkingCount += results.Count(r => r.IsWorking);
+                if (candidate.WorkingCount > 0) break;
+            }
             candidate.Status = CandidateStatus.Geprueft;
+            candidate.ErrorCount = 0;
             candidate.LastError = "";
         }
         catch (OperationCanceledException) { throw; }

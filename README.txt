@@ -1,4 +1,4 @@
-PROXYSAMMLER 1.8.0
+PROXYSAMMLER 1.8.1
 ================
 
 Portable Windows-Anwendung zum Sammeln und Prüfen freier HTTP-, SOCKS4- und
@@ -7,7 +7,7 @@ SOCKS5-Proxys.
 START
 -----
 1. ZIP-Datei vollständig entpacken.
-2. ProxySammler.exe starten.
+2. ProxySammler-1.8.1-Windows-x64.exe starten.
 3. Gewünschte Proxytypen und das Prüfprofil auswählen.
 4. "Sammeln und prüfen" oder "Neue Proxys suchen" anklicken.
 
@@ -25,7 +25,9 @@ Beim ersten Start werden vorhandene Trefferlisten aus Version 1.5 automatisch
 
 NEUE PROXYS SUCHEN
 ------------------
-"Neue Proxys suchen" prüft zunächst nur bisher unbekannte Kandidaten. Neue
+"Neue Proxys suchen" prüft zunächst unbekannte Kandidaten und früher
+ausgefallene Proxys. Mit aktiviertem Negativcache werden kürzlich ausgefallene
+Adressen erst nach sechs Stunden erneut geprüft; ohne Haken sofort. Neue
 funktionierende Treffer werden ohne Duplikate an die bestehenden drei Listen
 angehängt. Danach prüft das Programm die vollständigen betroffenen Listen ein
 zweites Mal und entfernt alle nicht mehr funktionierenden Proxys. Am Ende
@@ -103,8 +105,14 @@ gesetzt werden. Bei einer Ratenbegrenzung zeigt das Programm den nächsten
 möglichen Zeitpunkt an.
 
 Gefundene Quellen werden höchstens 8 MB groß heruntergeladen, auf Proxyformate
-untersucht und mit höchstens 12 Proxyadressen anhand der normalen Prüfroutine
-getestet. Kandidaten und Einstellungen stehen getrennt in source_candidates.json
+untersucht und zunächst mit höchstens 12 Proxyadressen anhand der normalen
+Prüfroutine getestet. Ohne Treffer folgen bis zu zwei weitere Stichproben:
+insgesamt höchstens 36 verschiedene Adressen. Bei erneuter Prüfung verschiebt
+sich die Auswahl. Eine Stichprobe kann dennoch funktionierende Adressen übersehen.
+Quellen ohne Treffer oder mit Abruffehlern werden bei späteren Suchläufen erneut
+geprüft. Quellen- und normale Proxy-Prüfungen laufen nicht gleichzeitig.
+TXT-, CSV- und JSON-Quellen werden auch nach der Übernahme gelesen; die
+Protokollauswahl filtert die tatsächlichen Proxytypen auch bei gemischten Listen. Kandidaten und Einstellungen stehen getrennt in source_candidates.json
 und source_discovery_settings.json. Beschädigte JSON-Dateien werden beim Start
 ignoriert. "Ausgewählte Quelle prüfen" wiederholt den Test. Nur geprüfte Quellen
 können manuell übernommen werden. "Alle geeigneten Quellen übernehmen" nutzt
@@ -135,3 +143,19 @@ SICHERHEIT
 Öffentliche kostenlose Proxys sind nicht vertrauenswürdig. Darüber sollten
 keine Passwörter, Cookies oder vertraulichen Inhalte übertragen werden.
 Windows SmartScreen kann bei der nicht digital signierten Anwendung warnen.
+
+ÄNDERUNGEN IN 1.8.1
+------------------
+- CSV-/JSON-Quellen funktionieren auch in der normalen Proxy-Suche.
+- Gemischte Listen respektieren die ausgewählten Proxytypen.
+- Quellen- und Proxy-Prüfungen laufen nacheinander; fällige stündliche Läufe warten.
+- Frühere Proxyfehler werden nach Ablauf des Negativcache erneut geprüft.
+- Ohne Treffer wird die Quellenstichprobe auf bis zu 36 Adressen erweitert.
+- Quellen ohne Treffer und fehlerhafte Kandidaten werden erneut geprüft.
+- Alte Trefferzahlen bleiben nach einem Abruffehler nicht stehen.
+
+UPDATE
+------
+Die neue EXE kann im bisherigen Programmordner verwendet werden. Beim Entpacken
+nicht die eigene sources.txt durch die mitgelieferte Standardliste ersetzen.
+Ergebnisse, proxy_history.json und die JSON-Dateien der Quellensuche behalten.

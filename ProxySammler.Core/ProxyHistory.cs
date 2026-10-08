@@ -35,13 +35,16 @@ public sealed class ProxyHistory
 		return proxyHistory;
 	}
 
-	public IReadOnlyList<ProxyEndpoint> SelectNew(IEnumerable<ProxyEndpoint> proxies, out int alreadyKnown)
+	public IReadOnlyList<ProxyEndpoint> SelectNew(IEnumerable<ProxyEndpoint> proxies, out int alreadyKnown,
+        bool skipRecentFailures = true, TimeSpan? failureCacheDuration = null)
 	{
 		List<ProxyEndpoint> list = new List<ProxyEndpoint>();
 		alreadyKnown = 0;
 		foreach (ProxyEndpoint proxy in proxies)
 		{
-			if (_entries.ContainsKey(Key(proxy)))
+			if (_entries.TryGetValue(Key(proxy), out var entry) &&
+                (entry.IsWorking || (skipRecentFailures &&
+                 DateTime.UtcNow - entry.CheckedAtUtc < (failureCacheDuration ?? TimeSpan.FromHours(6)))))
 			{
 				alreadyKnown++;
 			}
