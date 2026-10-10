@@ -249,8 +249,16 @@ public sealed class MainForm : Form
         {
             var collector = new ProxyCollector();
             var sources = ProxyCollector.ReadSources(SourcesPath);
+            var collectionEta = new RemainingTimeEstimator();
+            var sourceProgress = new Progress<(int Done, int Total)>(value =>
+            {
+                _progress.Maximum = Math.Max(1, value.Total);
+                _progress.Value = Math.Min(value.Done, _progress.Maximum);
+                _phase.Text = $"Quellen laden: {value.Done:N0} von {value.Total:N0} · " +
+                    collectionEta.Update("Quellen laden", value.Done, value.Total);
+            });
             var collection = await collector.CollectAsync(sources, protocols,
-                new Progress<string>(text => _phase.Text = text), _cancellation!.Token);
+                new Progress<string>(text => _status.Text = text), _cancellation!.Token, sourceProgress);
             var failedSources = collection.Sources.Count(s => s.Error is not null);
             if (!onlyNew && collection.Proxies.Count == 0)
                 throw new InvalidOperationException("Es wurden keine Kandidaten geladen. Die vorhandenen Listen wurden nicht verändert.");
@@ -365,7 +373,13 @@ public sealed class MainForm : Form
 
     private async Task<IReadOnlyList<ProxyTestResult>> CheckCandidatesAsync(IReadOnlyCollection<ProxyEndpoint> candidates, string label)
     {
-        if (candidates.Count == 0) return Array.Empty<ProxyTestResult>();
+        if (candidates.Count == 0)
+        {
+            _phase.Text = $"{label}: keine Kandidaten zu prüfen.";
+            return Array.Empty<ProxyTestResult>();
+        }
+        var eta = new RemainingTimeEstimator();
+        _phase.Text = $"{label}: Restzeit wird ermittelt…";
         _rows.Clear();
         _progress.Value = 0;
         var live = new List<ProxyTestResult>();
@@ -382,7 +396,8 @@ public sealed class MainForm : Form
             {
                 _progress.Maximum = Math.Max(1, value.Total);
                 _progress.Value = Math.Min(value.Done, _progress.Maximum);
-                _phase.Text = $"{label} – {value.Phase}: {value.Done:N0} von {value.Total:N0}";
+                _phase.Text = $"{label} – {value.Phase}: {value.Done:N0} von {value.Total:N0} · " +
+                    eta.Update(value.Phase, value.Done, value.Total);
             });
             return await checker.CheckAllTurboAsync(candidates, (int)_concurrency.Value,
                 TimeSpan.FromSeconds((double)_timeout.Value), TimeSpan.FromSeconds(1),
@@ -393,7 +408,8 @@ public sealed class MainForm : Form
         {
             _progress.Maximum = Math.Max(1, value.total);
             _progress.Value = Math.Min(value.done, _progress.Maximum);
-            _phase.Text = $"{label}: {value.done:N0} von {value.total:N0}";
+            _phase.Text = $"{label}: {value.done:N0} von {value.total:N0} · " +
+                eta.Update(label, value.done, value.total);
         });
         return await checker.CheckAllAsync(candidates, (int)_concurrency.Value,
             TimeSpan.FromSeconds((double)_timeout.Value), resultProgress, counts, _cancellation!.Token);
@@ -520,13 +536,23 @@ public sealed class MainForm : Form
         _discoveryProfile = SelectedProfile;
         _discoverySettings.LastSearchUtc = DateTimeOffset.UtcNow;
         _discoveryStore.SaveSettings(_discoverySettings);
-        _discoveryForm?.ShowProgress("Quellensuche startet…", true);
+        _discoveryForm?.ShowProgress("Quellensuche startet… Restzeit wird ermittelt…", true);
         try
         {
+            var discoveryEta = new RemainingTimeEstimator();
+            var discoveryMessage = "GitHub-Repositories suchen";
+            var discoveryRemaining = "Restzeit wird ermittelt…";
             var progress = new Progress<string>(message =>
             {
-                _discoveryForm?.ShowProgress(message, true);
+                discoveryMessage = message;
+                _discoveryForm?.ShowProgress($"{message} · {discoveryRemaining}", true);
                 _status.Text = "Quellensuche läuft";
+            });
+            var candidateProgress = new Progress<(int Done, int Total)>(value =>
+            {
+                discoveryRemaining = discoveryEta.Update("Quellen prüfen", value.Done, value.Total);
+                _discoveryForm?.ShowProgress(
+                    $"{discoveryMessage} · {value.Done:N0} von {value.Total:N0} · {discoveryRemaining}", true);
             });
             var knownSources = ProxyCollector.ReadSources(SourcesPath);
             var bots = (int)_concurrency.Value;
@@ -542,7 +568,7 @@ public sealed class MainForm : Form
                         catch (Exception error) { completion.SetException(error); }
                     }));
                     return completion.Task;
-                }, progress, _discoveryCancellation.Token));
+                }, progress, _discoveryCancellation.Token, candidateProgress));
             SaveCandidates();
             _discoveryForm?.RefreshRows(_sourceCandidates);
             if (summary is not null)
