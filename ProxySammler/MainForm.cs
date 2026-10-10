@@ -55,7 +55,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "ProxySammler 1.8.1";
+        Text = "ProxySammler 1.8.2";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(1450, 620);
