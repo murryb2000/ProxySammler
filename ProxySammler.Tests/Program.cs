@@ -16,6 +16,17 @@ var temp = Path.Combine(Path.GetTempPath(), "ProxySammler-1.8.1-Test-" + Guid.Ne
 Directory.CreateDirectory(temp);
 try
 {
+    long now = 0;
+    var estimate = new RemainingTimeEstimator(() => now);
+    Assert(estimate.Update("Prüfung", 0, 10).Contains("ermittelt"), "Vor ersten Messwerten darf keine Restzeit behauptet werden.");
+    now = System.Diagnostics.Stopwatch.Frequency * 10L;
+    Assert(estimate.Update("Prüfung", 5, 10) == "noch ca. 10 Sek.",
+        "Die Restzeit der bekannten Prüfmenge muss aus Durchsatz und verbleibenden Einträgen folgen.");
+    Assert(estimate.Update("Nachprüfung", 0, 10).Contains("ermittelt"),
+        "Eine neue Prüfphase muss eine neue Restzeitmessung beginnen.");
+    Assert(estimate.Update("Nachprüfung", 10, 10) == "Abschnitt abgeschlossen",
+        "Bei vollständiger Prüfung darf keine Restzeit verbleiben.");
+
     var store = ProxyListStore.Load(temp);
     store.Save(temp);
     var expected = new[] { "HTTP.txt", "SOCKS4.txt", "SOCKS5.txt" };
@@ -81,7 +92,12 @@ try
         var all = new HashSet<ProxyProtocol> { ProxyProtocol.Http, ProxyProtocol.Socks4, ProxyProtocol.Socks5 };
         var sources = new[] { new SourceDefinition(ProxyProtocol.Http, "https://example.com/proxies.csv"),
             new SourceDefinition(ProxyProtocol.Http, "https://example.com/proxies.json") };
-        var collection = await collector.CollectAsync(sources, all, null, CancellationToken.None);
+        var sourceCounts = new System.Collections.Concurrent.ConcurrentQueue<(int Done, int Total)>();
+        var collection = await collector.CollectAsync(sources, all, null, CancellationToken.None,
+            new InlineProgress<(int Done, int Total)>(value => sourceCounts.Enqueue(value)));
+        Assert(sourceCounts.Any(x => x.Done == 0 && x.Total == 2) &&
+            sourceCounts.Any(x => x.Done == 2 && x.Total == 2),
+            "Das Laden muss Start und Abschluss aller Quellen für die Restzeit melden.");
         Assert(collection.Proxies.Count == 3 && collection.Sources.All(x => x.Error is null),
             "Übernommene CSV-/JSON-Quellen müssen in der normalen Suche Kandidaten liefern.");
         var socksOnly = await collector.CollectAsync(sources, new HashSet<ProxyProtocol> { ProxyProtocol.Socks5 }, null, CancellationToken.None);
@@ -342,4 +358,9 @@ sealed class EmptyProvider : ISourceDiscoveryProvider
     public Task<(IReadOnlyList<DiscoveredLink> Links, int Repositories)> SearchAsync(
         SafeSourceDownloader downloader, IProgress<string>? progress, CancellationToken cancellationToken) =>
         Task.FromResult<(IReadOnlyList<DiscoveredLink>, int)>(([], 0));
+}
+
+sealed class InlineProgress<T>(Action<T> onProgress) : IProgress<T>
+{
+    public void Report(T value) => onProgress(value);
 }
