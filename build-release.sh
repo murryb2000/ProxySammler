@@ -12,8 +12,8 @@ publish_dir="$project_dir/release/ProxySammler"
   -c Release -r win-x64 --self-contained true --no-restore -m:1 /nr:false \
   -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o "$publish_dir"
 
-mv "$publish_dir/ProxySammler.exe" "$publish_dir/ProxySammler-1.8.1-Windows-x64.exe"
+mv "$publish_dir/ProxySammler.exe" "$publish_dir/ProxySammler-1.8.2-Windows-x64.exe"
 cp "$project_dir/README.txt" "$publish_dir/README.txt"
 cp "$project_dir/ProxySammler/sources.txt" "$publish_dir/sources.txt"
 mkdir -p "$project_dir/release"
-(cd "$publish_dir" && zip -9 "$project_dir/release/ProxySammler-1.8.1-Windows-x64-portable.zip" ProxySammler-1.8.1-Windows-x64.exe README.txt sources.txt)
+(cd "$publish_dir" && zip -9 "$project_dir/release/ProxySammler-1.8.2-Windows-x64-portable.zip" ProxySammler-1.8.2-Windows-x64.exe README.txt sources.txt)
