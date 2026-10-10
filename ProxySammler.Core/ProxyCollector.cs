@@ -57,9 +57,12 @@ public sealed class ProxyCollector
 		return list;
 	}
 
-	public async Task<CollectionResult> CollectAsync(IEnumerable<SourceDefinition> sources, ISet<ProxyProtocol> enabledProtocols, IProgress<string>? progress, CancellationToken cancellationToken)
+	public async Task<CollectionResult> CollectAsync(IEnumerable<SourceDefinition> sources, ISet<ProxyProtocol> enabledProtocols, IProgress<string>? progress, CancellationToken cancellationToken,
+        IProgress<(int Done, int Total)>? sourceProgress = null)
 	{
 		SourceDefinition[] selected = sources.ToArray();
+        var completedSources = 0;
+        sourceProgress?.Report((0, selected.Length));
 		ConcurrentBag<SourceResult> sourceResults = new ConcurrentBag<SourceResult>();
 		ConcurrentDictionary<string, ProxyEndpoint> unique = new ConcurrentDictionary<string, ProxyEndpoint>(StringComparer.OrdinalIgnoreCase);
 		await Parallel.ForEachAsync(selected, new ParallelOptions
@@ -106,6 +109,10 @@ public sealed class ProxyCollector
 			{
 				sourceResults.Add(new SourceResult(source, 0, ShortError(ex)));
 			}
+            finally
+            {
+                sourceProgress?.Report((Interlocked.Increment(ref completedSources), selected.Length));
+            }
 		});
 		progress?.Report($"{unique.Count:N0} eindeutige Proxys gesammelt.");
 		return new CollectionResult(unique.Values.ToArray(), sourceResults.OrderBy((SourceResult x) => Array.IndexOf(selected, x.Source)).ToArray());
