@@ -1,4 +1,4 @@
-ProxySammler 1.8.1 – Quellcode
+ProxySammler 1.8.2 – Quellcode
 =============================
 
 Enthalten sind:

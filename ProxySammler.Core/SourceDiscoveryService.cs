@@ -23,7 +23,8 @@ public sealed class SourceDiscoveryService
 
     public async Task<DiscoverySummary?> SearchAsync(IList<SourceCandidate> candidates,
         IReadOnlyCollection<SourceDefinition> knownSources, bool autoAccept, int bots, TimeSpan timeout,
-        Func<SourceCandidate, Task<bool>> accept, IProgress<string>? progress, CancellationToken cancellationToken)
+        Func<SourceCandidate, Task<bool>> accept, IProgress<string>? progress, CancellationToken cancellationToken,
+        IProgress<(int Done, int Total)>? candidateProgress = null)
     {
         if (!await _runGate.WaitAsync(0, cancellationToken)) return null;
         try
@@ -53,6 +54,8 @@ public sealed class SourceDiscoveryService
                 (c.Status == CandidateStatus.Neu || c.Status == CandidateStatus.Fehlerhaft ||
                  (c.Status == CandidateStatus.Geprueft && c.WorkingCount == 0)) &&
                 !known.Contains(SourceFormats.NormalizeUrl(c.Url)))).ToArray();
+            candidateProgress?.Report((0, toCheck.Length));
+            var processed = 0;
             var checkedCount = 0;
             var failed = 0;
             var accepted = 0;
@@ -67,6 +70,7 @@ public sealed class SourceDiscoveryService
                 else checkedCount++;
                 progress?.Report($"Quelle geprüft: {candidate.WorkingCount}/{candidate.SampleCount} Treffer, Qualität {candidate.Quality}/100 – {candidate.Url}");
                 if (autoAccept && DiscoveryPolicy.Suitable(candidate) && await accept(candidate)) accepted++;
+                candidateProgress?.Report((++processed, toCheck.Length));
             }
             return new DiscoverySummary(result.Repositories, result.Links.Count, added.Count, knownCount, checkedCount, accepted, failed);
         }
