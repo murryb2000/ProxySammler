@@ -1,4 +1,4 @@
-PROXYSAMMLER 1.8.3
+PROXYSAMMLER 1.8.4
 ================
 
 Portable Windows-Anwendung zum Sammeln und Prüfen freier HTTP-, SOCKS4- und
@@ -7,7 +7,7 @@ SOCKS5-Proxys.
 START
 -----
 1. ZIP-Datei vollständig entpacken.
-2. ProxySammler-1.8.3-Windows-x64.exe starten.
+2. ProxySammler-1.8.4-Windows-x64.exe starten.
 3. Gewünschte Proxytypen und das Prüfprofil auswählen.
 4. "Sammeln und prüfen" oder "Neue Proxys suchen" anklicken.
 
@@ -144,6 +144,19 @@ SICHERHEIT
 keine Passwörter, Cookies oder vertraulichen Inhalte übertragen werden.
 Windows SmartScreen kann bei der nicht digital signierten Anwendung warnen.
 
+FENSTER UND BEDIENELEMENTE
+--------------------------
+Beim ersten Start öffnet sich das Fenster mit etwa 1335 × 733 Pixeln zentriert.
+Größe, Position und maximierter Zustand werden beim Schließen in
+window_settings.json gespeichert und beim nächsten Start wiederhergestellt.
+Auf kleineren Bildschirmen wird das Fenster passend begrenzt. Bei schmalen
+Fenstern verschieben sich Optionsgruppen und Buttons in zusätzliche Zeilen.
+
+ÄNDERUNGEN IN 1.8.4
+------------------
+- Startgröße wie im Referenzbild; spätere Fenstergröße und Position bleiben erhalten.
+- Buttons und Optionen behalten ihre Reihenfolge und brechen erst bei Platzmangel um.
+
 ÄNDERUNGEN IN 1.8.3
 ------------------
 - Wiederholt ausgefallene Proxys werden gestaffelt nach 6, 24 und 72 Stunden erneut geprüft.
@@ -169,4 +182,4 @@ UPDATE
 ------
 Die neue EXE kann im bisherigen Programmordner verwendet werden. Beim Entpacken
 nicht die eigene sources.txt durch die mitgelieferte Standardliste ersetzen.
-Ergebnisse, proxy_history.json und die JSON-Dateien der Quellensuche behalten.
+Ergebnisse, proxy_history.json, window_settings.json und die JSON-Dateien der Quellensuche behalten.
