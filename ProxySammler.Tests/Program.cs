@@ -122,6 +122,36 @@ try
     Assert(retry.Count == 2 && retry.Contains(recentDead) && retry.Contains(oldDead) && retrySkipped == 1,
         "Ohne Negativcache müssen auch frisch ausgefallene Proxys erneut geprüft werden.");
 
+    var adaptive = new ProxyHistory();
+    var repeatedlyDead = new ProxyEndpoint(ProxyProtocol.Http, "8.8.4.4", 3128);
+    var retryNow = DateTime.UtcNow;
+    adaptive.Update(new[] { new ProxyTestResult { Proxy = repeatedlyDead, IsWorking = false,
+        CheckedAtUtc = retryNow.AddHours(-25) } });
+    Assert(adaptive.SelectNew(new[] { repeatedlyDead }, out _).Count == 1,
+        "Ein einmal ausgefallener Proxy muss nach sechs Stunden erneut geprüft werden.");
+    adaptive.Update(new[] { new ProxyTestResult { Proxy = repeatedlyDead, IsWorking = false,
+        CheckedAtUtc = retryNow.AddHours(-7) } });
+    Assert(adaptive.SelectNew(new[] { repeatedlyDead }, out _).Count == 0 &&
+        adaptive.Prepare(new[] { repeatedlyDead }, true, TimeSpan.FromHours(6), out _).Count == 0,
+        "Zweimal ausgefallene Proxys sollen in beiden Sucharten 24 Stunden pausieren.");
+    Assert(adaptive.SelectNew(new[] { repeatedlyDead }, out _, skipRecentFailures: false).Count == 1 &&
+        adaptive.Prepare(new[] { repeatedlyDead }, false, TimeSpan.FromHours(6), out _).Count == 1,
+        "Ohne Cache müssen auch wiederholt ausgefallene Kandidaten sofort geprüft werden.");
+    adaptive.Update(new[] { new ProxyTestResult { Proxy = repeatedlyDead, IsWorking = false,
+        CheckedAtUtc = retryNow.AddHours(-25) } });
+    Assert(adaptive.SelectNew(new[] { repeatedlyDead }, out _).Count == 0,
+        "Nach drei Fehlern soll ein Proxy höchstens alle 72 Stunden erneut geprüft werden.");
+    var adaptivePath = Path.Combine(temp, "adaptive-history.json");
+    adaptive.Save(adaptivePath);
+    Assert(ProxyHistory.Load(adaptivePath).SelectNew(new[] { repeatedlyDead }, out _).Count == 0,
+        "Die gestaffelte Wartezeit muss nach einem Neustart erhalten bleiben.");
+    adaptive.Update(new[] { new ProxyTestResult { Proxy = repeatedlyDead, IsWorking = true,
+        CheckedAtUtc = retryNow.AddHours(-7) } });
+    adaptive.Update(new[] { new ProxyTestResult { Proxy = repeatedlyDead, IsWorking = false,
+        CheckedAtUtc = retryNow.AddHours(-7) } });
+    Assert(adaptive.SelectNew(new[] { repeatedlyDead }, out _).Count == 1,
+        "Ein funktionierender Proxy muss die Fehlerfolge zurücksetzen.");
+
     var candidate = new SourceCandidate { Url = "https://example.com/list.txt", Protocol = ProxyProtocol.Http,
         Status = CandidateStatus.Geprueft, Reachable = true, ProxyCount = 100, SampleCount = 12,
         WorkingCount = 1, UpdatedUtc = DateTimeOffset.UtcNow };
