@@ -1,4 +1,4 @@
-PROXYSAMMLER 1.8.2
+PROXYSAMMLER 1.8.3
 ================
 
 Portable Windows-Anwendung zum Sammeln und Prüfen freier HTTP-, SOCKS4- und
@@ -7,7 +7,7 @@ SOCKS5-Proxys.
 START
 -----
 1. ZIP-Datei vollständig entpacken.
-2. ProxySammler-1.8.2-Windows-x64.exe starten.
+2. ProxySammler-1.8.3-Windows-x64.exe starten.
 3. Gewünschte Proxytypen und das Prüfprofil auswählen.
 4. "Sammeln und prüfen" oder "Neue Proxys suchen" anklicken.
 
@@ -27,7 +27,7 @@ NEUE PROXYS SUCHEN
 ------------------
 "Neue Proxys suchen" prüft zunächst unbekannte Kandidaten und früher
 ausgefallene Proxys. Mit aktiviertem Negativcache werden kürzlich ausgefallene
-Adressen erst nach sechs Stunden erneut geprüft; ohne Haken sofort. Neue
+Adressen nach sechs, 24 oder 72 Stunden erneut geprüft; ohne Haken sofort. Neue
 funktionierende Treffer werden ohne Duplikate an die bestehenden drei Listen
 angehängt. Danach prüft das Programm die vollständigen betroffenen Listen ein
 zweites Mal und entfernt alle nicht mehr funktionierenden Proxys. Am Ende
@@ -67,10 +67,10 @@ Proxys können dabei jedoch aussortiert werden, obwohl sie ohne Turbo innerhalb
 des normalen Timeouts noch funktioniert hätten. Das Ergebnis ist deshalb
 nicht immer vollständig identisch.
 
-TOTE 6 STUNDEN ÜBERSPRINGEN
+TOTE 6 BIS 72 STUNDEN ÜBERSPRINGEN
 ---------------------------
-Mit gesetztem Haken werden Proxys, die kürzlich bereits ausgefallen sind, für
-sechs Stunden nicht erneut geprüft. Ohne Haken dauert die Prüfung länger und
+Mit gesetztem Haken werden ausgefallene Proxys nach dem ersten Fehler für
+sechs Stunden, nach dem zweiten für 24 und danach für 72 Stunden pausiert. Ohne Haken dauert die Prüfung länger und
 verursacht mehr Verbindungen, kann aber Proxys früher wiederfinden, die nur
 vorübergehend gestört waren. Die vollständige Nachprüfung der drei gespeicherten
 Listen überspringt keine Einträge.
@@ -143,6 +143,11 @@ SICHERHEIT
 Öffentliche kostenlose Proxys sind nicht vertrauenswürdig. Darüber sollten
 keine Passwörter, Cookies oder vertraulichen Inhalte übertragen werden.
 Windows SmartScreen kann bei der nicht digital signierten Anwendung warnen.
+
+ÄNDERUNGEN IN 1.8.3
+------------------
+- Wiederholt ausgefallene Proxys werden gestaffelt nach 6, 24 und 72 Stunden erneut geprüft.
+- Ohne Haken werden alle Kandidaten geprüft. Erfolgreiche Tests setzen die Fehlerfolge zurück.
 
 ÄNDERUNGEN IN 1.8.2
 ------------------
