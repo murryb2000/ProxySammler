@@ -20,7 +20,7 @@ public sealed class SourceDiscoveryForm : Form
     public SourceDiscoveryForm(MainForm main, IReadOnlyCollection<SourceCandidate> candidates, DiscoverySettings settings)
     {
         _main = main;
-        Text = "Neue Quellen finden – ProxySammler 1.8.3";
+        Text = "Neue Quellen finden – ProxySammler 1.8.4";
         Size = new Size(1300, 650);
         MinimumSize = new Size(950, 480);
         StartPosition = FormStartPosition.CenterParent;
