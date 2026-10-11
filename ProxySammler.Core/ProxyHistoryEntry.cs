@@ -12,6 +12,8 @@ public sealed class ProxyHistoryEntry
 
 	public bool IsWorking { get; set; }
 
+	public int FailureStreak { get; set; }
+
 	public long ResponseTimeMs { get; set; }
 
 	public DateTime CheckedAtUtc { get; set; }
