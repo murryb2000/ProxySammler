@@ -146,9 +146,9 @@ public sealed class MainForm : Form
         }
         catch (Exception) { /* Damaged or inaccessible settings use the default size. */ }
 
-        var wanted = saved is { Width: >= 780, Height: >= 550 }
-            ? new Rectangle(saved.X, saved.Y, saved.Width, saved.Height)
-            : new Rectangle(0, 0, 1335, 733);
+        if (saved is not { Width: >= 780, Height: >= 550 }) saved = null;
+        var wanted = saved is null ? new Rectangle(0, 0, 1335, 733)
+            : new Rectangle(saved.X, saved.Y, saved.Width, saved.Height);
         var screen = saved is null
             ? Screen.PrimaryScreen
             : Screen.AllScreens.FirstOrDefault(item => item.WorkingArea.IntersectsWith(wanted))
@@ -809,16 +809,6 @@ public sealed class MainForm : Form
 
     private static Label LabelFor(string text) => new() { Text = text, AutoSize = true, Margin = new Padding(8, 7, 2, 0) };
     private static Control Spacer(int width) => new Panel { Width = width, Height = 1 };
-    private static FlowLayoutPanel FixedToolbarRow() => new()
-    {
-        AutoSize = true,
-        AutoSizeMode = AutoSizeMode.GrowAndShrink,
-        FlowDirection = FlowDirection.LeftToRight,
-        WrapContents = false,
-        Margin = Padding.Empty,
-        Padding = Padding.Empty
-    };
-
     private sealed class RowModel
     {
         public required string Protocol { get; init; }
