@@ -185,6 +185,8 @@ public sealed class MainForm : Form
 
     private sealed class WindowGeometry
     {
+        public WindowGeometry() { }
+
         public int X { get; set; }
         public int Y { get; set; }
         public int Width { get; set; }
@@ -271,6 +273,10 @@ public sealed class MainForm : Form
                 root.RowStyles[1].Height = rowHeight;
         }
         toolbar.SizeChanged += (_, _) => ArrangeToolbar();
+        foreach (var control in optionGroups.Concat(actionGroups).Concat(automationGroups)
+                     .SelectMany(group => group))
+            control.SizeChanged += (_, _) => ArrangeToolbar();
+        toolbar.HandleCreated += (_, _) => ArrangeToolbar();
         root.Controls.Add(toolbar, 0, 1);
         root.Controls.Add(_grid, 0, 2);
 
