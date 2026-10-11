@@ -38,13 +38,14 @@ public sealed class ProxyHistory
 	public IReadOnlyList<ProxyEndpoint> SelectNew(IEnumerable<ProxyEndpoint> proxies, out int alreadyKnown,
         bool skipRecentFailures = true, TimeSpan? failureCacheDuration = null)
 	{
+		DateTime utcNow = DateTime.UtcNow;
 		List<ProxyEndpoint> list = new List<ProxyEndpoint>();
 		alreadyKnown = 0;
 		foreach (ProxyEndpoint proxy in proxies)
 		{
 			if (_entries.TryGetValue(Key(proxy), out var entry) &&
                 (entry.IsWorking || (skipRecentFailures &&
-                 DateTime.UtcNow - entry.CheckedAtUtc < (failureCacheDuration ?? TimeSpan.FromHours(6)))))
+                 utcNow - entry.CheckedAtUtc < FailureCooldown(entry, failureCacheDuration ?? TimeSpan.FromHours(6)))))
 			{
 				alreadyKnown++;
 			}
@@ -64,7 +65,7 @@ public sealed class ProxyHistory
 		foreach (ProxyEndpoint proxy in proxies)
 		{
 			_entries.TryGetValue(Key(proxy), out ProxyHistoryEntry value);
-			if (skipRecentFailures && value != null && !value.IsWorking && utcNow - value.CheckedAtUtc < failureCacheDuration)
+			if (skipRecentFailures && value != null && !value.IsWorking && utcNow - value.CheckedAtUtc < FailureCooldown(value, failureCacheDuration))
 			{
 				skipped++;
 			}
@@ -82,12 +83,14 @@ public sealed class ProxyHistory
 	{
 		foreach (ProxyTestResult result in results)
 		{
+			_entries.TryGetValue(Key(result.Proxy), out var previous);
 			_entries[Key(result.Proxy)] = new ProxyHistoryEntry
 			{
 				Protocol = result.Proxy.Protocol,
 				Host = result.Proxy.Host,
 				Port = result.Proxy.Port,
 				IsWorking = result.IsWorking,
+				FailureStreak = result.IsWorking ? 0 : Math.Min(3, (previous?.IsWorking == false ? Math.Max(1, previous.FailureStreak) : 0) + 1),
 				ResponseTimeMs = result.ResponseTimeMs,
 				CheckedAtUtc = result.CheckedAtUtc
 			};
@@ -110,6 +113,15 @@ public sealed class ProxyHistory
 		{
 			WriteIndented = true
 		}));
+	}
+
+	private static TimeSpan FailureCooldown(ProxyHistoryEntry entry, TimeSpan initialDuration)
+	{
+		// A single failure keeps the existing six-hour behavior. Repeated failures
+		// are retried less often, but never removed permanently from the search.
+		int factor = entry.FailureStreak switch { >= 3 => 12, 2 => 4, _ => 1 };
+		return TimeSpan.FromTicks(Math.Min(TimeSpan.FromDays(3).Ticks,
+			Math.Min(initialDuration.Ticks, TimeSpan.FromDays(3).Ticks / factor) * factor));
 	}
 
 	private static string Key(ProxyEndpoint proxy)
