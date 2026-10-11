@@ -12,7 +12,7 @@ public sealed class MainForm : Form
     private readonly CheckBox _socks5 = new() { Text = "SOCKS5", Checked = true, AutoSize = true };
     private readonly CheckBox _showErrors = new() { Text = "Fehler anzeigen", AutoSize = true };
     private readonly CheckBox _turbo = new() { Text = "Turbo-Modus", Checked = true, AutoSize = true };
-    private readonly CheckBox _negativeCache = new() { Text = "Tote 6 Std. überspringen", Checked = true, AutoSize = true };
+    private readonly CheckBox _negativeCache = new() { Text = "Tote 6–72 Std. überspringen", Checked = true, AutoSize = true };
     private readonly CheckBox _hourlySearch = new() { Text = "Stündlich automatisch neue Proxys suchen", AutoSize = true };
     private readonly System.Windows.Forms.Timer _hourlyTimer = new() { Interval = 15_000 };
     private DateTimeOffset? _nextHourlySearch;
@@ -55,7 +55,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "ProxySammler 1.8.2";
+        Text = "ProxySammler 1.8.3";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(1450, 620);
