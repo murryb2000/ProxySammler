@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text.Json;
 using ProxySammler.Core;
 using ProxySammler.Persistence;
 
@@ -49,17 +50,18 @@ public sealed class MainForm : Form
     private static string SourcesPath => Path.Combine(AppDirectory, "sources.txt");
     private static string ResultsDirectory => Path.Combine(AppDirectory, "Ergebnisse");
     private static string HistoryPath => Path.Combine(AppDirectory, "proxy_history.json");
+    private static string WindowSettingsPath => Path.Combine(AppDirectory, "window_settings.json");
     private static string LegacyPoolDirectory => Path.Combine(AppDirectory, "Gefundene_Proxys");
     private ProxyCheckProfile SelectedProfile => _profile.SelectedIndex == 1
         ? ProxyCheckProfile.MacAttackCompatible : ProxyCheckProfile.SecureGeneric;
 
     public MainForm()
     {
-        Text = "ProxySammler 1.8.3";
+        Text = "ProxySammler 1.8.4";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
-        MinimumSize = new Size(1450, 620);
-        Size = new Size(1500, 760);
+        MinimumSize = new Size(780, 550);
+        Size = new Size(1335, 733);
         Font = new Font("Segoe UI", 9F);
         BackColor = Color.FromArgb(245, 247, 250);
 
@@ -114,6 +116,7 @@ public sealed class MainForm : Form
                 await DiscoverAsync(true);
         };
         _discoveryTimer.Start();
+        Load += (_, _) => RestoreWindowGeometry();
         FormClosing += (_, e) =>
         {
             if (_cancellation is { IsCancellationRequested: false })
@@ -125,6 +128,7 @@ public sealed class MainForm : Form
             }
             if (!e.Cancel)
             {
+                SaveWindowGeometry();
                 _hourlyTimer.Stop();
                 _discoveryTimer.Stop();
                 _discoveryCancellation?.Cancel();
@@ -132,11 +136,67 @@ public sealed class MainForm : Form
         };
     }
 
+    private void RestoreWindowGeometry()
+    {
+        WindowGeometry? saved = null;
+        try
+        {
+            if (File.Exists(WindowSettingsPath))
+                saved = JsonSerializer.Deserialize<WindowGeometry>(File.ReadAllText(WindowSettingsPath));
+        }
+        catch (Exception) { /* Damaged or inaccessible settings use the default size. */ }
+
+        var wanted = saved is { Width: >= 780, Height: >= 550 }
+            ? new Rectangle(saved.X, saved.Y, saved.Width, saved.Height)
+            : new Rectangle(0, 0, 1335, 733);
+        var screen = saved is null
+            ? Screen.PrimaryScreen
+            : Screen.AllScreens.FirstOrDefault(item => item.WorkingArea.IntersectsWith(wanted))
+              ?? Screen.PrimaryScreen;
+        var area = screen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
+        var width = Math.Min(wanted.Width, area.Width);
+        var height = Math.Min(wanted.Height, area.Height);
+        var x = saved is null ? area.Left + (area.Width - width) / 2
+            : Math.Clamp(wanted.X, area.Left, area.Right - width);
+        var y = saved is null ? area.Top + (area.Height - height) / 2
+            : Math.Clamp(wanted.Y, area.Top, area.Bottom - height);
+        StartPosition = FormStartPosition.Manual;
+        Bounds = new Rectangle(x, y, width, height);
+        if (saved?.Maximized == true) WindowState = FormWindowState.Maximized;
+    }
+
+    private void SaveWindowGeometry()
+    {
+        try
+        {
+            var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            if (bounds.Width < MinimumSize.Width || bounds.Height < MinimumSize.Height) return;
+            var settings = new WindowGeometry
+            {
+                X = bounds.X, Y = bounds.Y, Width = bounds.Width, Height = bounds.Height,
+                Maximized = WindowState == FormWindowState.Maximized
+            };
+            var temporary = WindowSettingsPath + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(settings));
+            File.Move(temporary, WindowSettingsPath, overwrite: true);
+        }
+        catch (Exception) { /* Settings must never prevent the application from closing. */ }
+    }
+
+    private sealed class WindowGeometry
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public bool Maximized { get; set; }
+    }
+
     private Control BuildLayout()
     {
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 5, ColumnCount = 1 };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 110));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -150,45 +210,67 @@ public sealed class MainForm : Form
         });
         root.Controls.Add(title, 0, 0);
 
-        var toolbar = new TableLayoutPanel
+        // Fixed rows at the reference width. Whole option groups move to the
+        // next line only when the available width becomes too small.
+        var toolbar = new Panel
         {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 1,
-            RowCount = 3,
-            GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
-            Padding = new Padding(10),
+            Dock = DockStyle.Fill,
             BackColor = Color.White,
             Margin = new Padding(0, 0, 0, 10)
         };
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        toolbar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        toolbar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        toolbar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-        var optionsRow = FixedToolbarRow();
-        optionsRow.Controls.AddRange(new Control[]
+        var optionGroups = new Control[][]
         {
-            _http, _socks4, _socks5, Spacer(8), LabelFor("Prüfprofil:"), _profile,
-            Spacer(8), LabelFor("Prüf-Bots:"), _concurrency, LabelFor("Timeout (s):"), _timeout,
-            _turbo, _negativeCache
-        });
-
-        var actionsRow = FixedToolbarRow();
-        actionsRow.Margin = new Padding(0, 6, 0, 0);
-        actionsRow.Controls.AddRange(new Control[]
+            [_http, _socks4, _socks5],
+            [Spacer(8), LabelFor("Prüfprofil:"), _profile],
+            [Spacer(8), LabelFor("Prüf-Bots:"), _concurrency],
+            [LabelFor("Timeout (s):"), _timeout],
+            [_turbo],
+            [_negativeCache]
+        };
+        var actionGroups = new Control[][]
         {
-            _start, _newOnly, _retestLists, _stop, Spacer(8),
-            _showErrors, _clipboard, _sources, _discover, _folder
-        });
+            [_start], [_newOnly], [_retestLists], [_stop],
+            [Spacer(8), _showErrors], [_clipboard], [_sources], [_discover], [_folder]
+        };
+        var automationGroups = new Control[][] { [_hourlySearch] };
+        toolbar.Controls.AddRange(optionGroups.Concat(actionGroups).Concat(automationGroups)
+            .SelectMany(group => group).ToArray());
 
-        toolbar.Controls.Add(optionsRow, 0, 0);
-        toolbar.Controls.Add(actionsRow, 0, 1);
-        var automationRow = FixedToolbarRow();
-        automationRow.Margin = new Padding(0, 6, 0, 0);
-        automationRow.Controls.Add(_hourlySearch);
-        toolbar.Controls.Add(automationRow, 0, 2);
+        int ArrangeRow(Control[][] groups, int top, int availableWidth)
+        {
+            var left = 10;
+            var right = Math.Max(40, availableWidth - 10);
+            var lineHeight = 0;
+            foreach (var group in groups)
+            {
+                var groupWidth = group.Sum(control => control.Width + control.Margin.Horizontal);
+                if (left > 10 && left + groupWidth > right)
+                {
+                    top += lineHeight + 4;
+                    left = 10;
+                    lineHeight = 0;
+                }
+                foreach (var control in group)
+                {
+                    control.Location = new Point(left + control.Margin.Left, top + control.Margin.Top);
+                    left += control.Width + control.Margin.Horizontal;
+                    lineHeight = Math.Max(lineHeight, control.Height + control.Margin.Vertical);
+                }
+            }
+            return top + lineHeight;
+        }
+
+        void ArrangeToolbar()
+        {
+            if (toolbar.ClientSize.Width <= 0) return;
+            var bottom = ArrangeRow(optionGroups, 10, toolbar.ClientSize.Width);
+            bottom = ArrangeRow(actionGroups, bottom + 6, toolbar.ClientSize.Width);
+            bottom = ArrangeRow(automationGroups, bottom + 6, toolbar.ClientSize.Width);
+            var rowHeight = bottom + 10 + toolbar.Margin.Vertical;
+            if (Math.Abs(root.RowStyles[1].Height - rowHeight) > 0.5f)
+                root.RowStyles[1].Height = rowHeight;
+        }
+        toolbar.SizeChanged += (_, _) => ArrangeToolbar();
         root.Controls.Add(toolbar, 0, 1);
         root.Controls.Add(_grid, 0, 2);
 
