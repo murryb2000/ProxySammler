@@ -29,57 +29,79 @@ public sealed class ProxyChecker
 		_profile = profile;
 	}
 
-	public async Task<IReadOnlyList<ProxyTestResult>> CheckAllAsync(IReadOnlyCollection<ProxyEndpoint> proxies, int concurrency, TimeSpan timeout, IProgress<ProxyTestResult>? resultProgress, IProgress<(int done, int total)>? countProgress, CancellationToken cancellationToken)
+	public async Task<IReadOnlyList<ProxyTestResult>> CheckAllAsync(IReadOnlyCollection<ProxyEndpoint> proxies, int concurrency, TimeSpan timeout, IProgress<ProxyTestResult>? resultProgress, IProgress<(int done, int total)>? countProgress, CancellationToken cancellationToken, bool adaptive = false, IProgress<int>? botProgress = null)
 	{
-		ConcurrentBag<ProxyTestResult> results = new ConcurrentBag<ProxyTestResult>();
+		ConcurrentBag<ProxyTestResult> results = new();
 		int done = 0;
-		await Parallel.ForEachAsync(proxies, new ParallelOptions
-		{
-			MaxDegreeOfParallelism = Math.Clamp(concurrency, 1, 100),
-			CancellationToken = cancellationToken
-		}, async delegate(ProxyEndpoint proxy, CancellationToken ct)
-		{
-			ProxyTestResult proxyTestResult = await CheckOneAsync(proxy, timeout, ct);
-			results.Add(proxyTestResult);
-			resultProgress?.Report(proxyTestResult);
-			countProgress?.Report((Interlocked.Increment(ref done), proxies.Count));
-		});
-		return (from r in results
-			orderby r.IsWorking descending, (!r.IsWorking) ? long.MaxValue : r.ResponseTimeMs, r.Proxy.Protocol
-			select r).ThenBy<ProxyTestResult, string>((ProxyTestResult r) => r.Proxy.Host, StringComparer.Ordinal).ThenBy((ProxyTestResult r) => r.Proxy.Port).ToArray();
+		await RunChecksAsync(proxies, concurrency, adaptive, async (proxy, ct) => await CheckOneAsync(proxy, timeout, ct),
+			(proxy, result) =>
+			{
+				results.Add(result!);
+				resultProgress?.Report(result!);
+				countProgress?.Report((Interlocked.Increment(ref done), proxies.Count));
+			}, botProgress, cancellationToken);
+		return Sort(results);
 	}
 
-	public async Task<IReadOnlyList<ProxyTestResult>> CheckAllTurboAsync(IReadOnlyCollection<ProxyEndpoint> proxies, int botCount, TimeSpan timeout, TimeSpan precheckTimeout, IProgress<ProxyTestResult>? resultProgress, IProgress<CheckProgress>? phaseProgress, CancellationToken cancellationToken)
+	public async Task<IReadOnlyList<ProxyTestResult>> CheckAllTurboAsync(IReadOnlyCollection<ProxyEndpoint> proxies, int botCount, TimeSpan timeout, TimeSpan precheckTimeout, IProgress<ProxyTestResult>? resultProgress, IProgress<CheckProgress>? phaseProgress, CancellationToken cancellationToken, bool adaptive = false, IProgress<int>? botProgress = null)
 	{
-		ConcurrentBag<ProxyEndpoint> survivors = new ConcurrentBag<ProxyEndpoint>();
-		ConcurrentBag<ProxyTestResult> results = new ConcurrentBag<ProxyTestResult>();
+		ConcurrentBag<ProxyEndpoint> survivors = new();
+		ConcurrentBag<ProxyTestResult> results = new();
 		int prechecked = 0;
 		phaseProgress?.Report(new CheckProgress("Schnelltest", 0, proxies.Count));
-		await Parallel.ForEachAsync(proxies, CreateParallelOptions(botCount, cancellationToken), async delegate(ProxyEndpoint proxy, CancellationToken ct)
-		{
-			ProxyTestResult proxyTestResult = await FastPortCheckAsync(proxy, precheckTimeout, ct);
-			if (proxyTestResult == null)
+		await RunChecksAsync(proxies, botCount, adaptive, FastPortCheckAsyncProxy,
+			(proxy, result) =>
 			{
-				survivors.Add(proxy);
-			}
-			else
-			{
-				results.Add(proxyTestResult);
-				resultProgress?.Report(proxyTestResult);
-			}
-			phaseProgress?.Report(new CheckProgress("Schnelltest", Interlocked.Increment(ref prechecked), proxies.Count));
-		});
+				if (result is null) survivors.Add(proxy);
+				else { results.Add(result); resultProgress?.Report(result); }
+				phaseProgress?.Report(new CheckProgress("Schnelltest", Interlocked.Increment(ref prechecked), proxies.Count));
+			}, botProgress, cancellationToken);
 		ProxyEndpoint[] candidates = survivors.ToArray();
 		int verified = 0;
 		phaseProgress?.Report(new CheckProgress("HTTPS-Prüfung", 0, candidates.Length));
-		await Parallel.ForEachAsync(candidates, CreateParallelOptions(botCount, cancellationToken), async delegate(ProxyEndpoint proxy, CancellationToken ct)
-		{
-			ProxyTestResult proxyTestResult = await CheckOneAsync(proxy, timeout, ct);
-			results.Add(proxyTestResult);
-			resultProgress?.Report(proxyTestResult);
-			phaseProgress?.Report(new CheckProgress("HTTPS-Prüfung", Interlocked.Increment(ref verified), candidates.Length));
-		});
+		await RunChecksAsync(candidates, botCount, adaptive, async (proxy, ct) => await CheckOneAsync(proxy, timeout, ct),
+			(proxy, result) =>
+			{
+				results.Add(result!);
+				resultProgress?.Report(result!);
+				phaseProgress?.Report(new CheckProgress("HTTPS-Prüfung", Interlocked.Increment(ref verified), candidates.Length));
+			}, botProgress, cancellationToken);
 		return Sort(results);
+
+		Task<ProxyTestResult?> FastPortCheckAsyncProxy(ProxyEndpoint proxy, CancellationToken ct) =>
+			FastPortCheckAsync(proxy, precheckTimeout, ct);
+	}
+
+	private static async Task RunChecksAsync(IReadOnlyCollection<ProxyEndpoint> proxies, int limit, bool adaptive,
+		Func<ProxyEndpoint, CancellationToken, Task<ProxyTestResult?>> check,
+		Action<ProxyEndpoint, ProxyTestResult?> onResult, IProgress<int>? botProgress, CancellationToken cancellationToken)
+	{
+		int cap = Math.Clamp(limit, 1, 100);
+		int bots = adaptive && proxies.Count > 600 ? Math.Min(50, cap) : cap;
+		double previousRate = 0;
+		// Separate batches allow gradual adjustment without interrupting active connections.
+		foreach (var batch in proxies.Chunk(adaptive ? 300 : Math.Max(1, proxies.Count)))
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+			botProgress?.Report(bots);
+			int timedOut = 0;
+			var stopwatch = Stopwatch.StartNew();
+			await Parallel.ForEachAsync(batch, CreateParallelOptions(bots, cancellationToken), async (proxy, ct) =>
+			{
+				var result = await check(proxy, ct);
+				if (result?.Error.Contains("Zeitüberschreitung", StringComparison.OrdinalIgnoreCase) == true)
+					Interlocked.Increment(ref timedOut);
+				onResult(proxy, result);
+			});
+			if (!adaptive || batch.Length < 100) continue;
+			double rate = batch.Length / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
+			double timeoutRate = (double)timedOut / batch.Length;
+			if (previousRate > 0 && timeoutRate > 0.5 && rate < previousRate * 0.8)
+				bots = Math.Max(Math.Min(10, cap), bots - 10);
+			else if (bots < cap && timeoutRate < 0.5 && (previousRate == 0 || rate >= previousRate * 0.85))
+				bots = Math.Min(cap, bots + 10);
+			previousRate = rate;
+		}
 	}
 
 	public async Task<ProxyTestResult> CheckOneAsync(ProxyEndpoint proxy, TimeSpan timeout, CancellationToken cancellationToken)
