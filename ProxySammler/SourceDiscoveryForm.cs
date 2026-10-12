@@ -59,7 +59,7 @@ public sealed class SourceDiscoveryForm : Form
         AddColumn(nameof(SourceCandidate.LastError), "Letzter Fehler", 260);
         layout.Controls.Add(_grid, 0, 1);
 
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
         Button Button(string text, Action action)
         {
             var button = new Button { Text = text, AutoSize = true };

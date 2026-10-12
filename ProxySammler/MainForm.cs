@@ -562,9 +562,19 @@ public sealed class MainForm : Form
         using var dialog = new Form { Text = "Quellenertrag", Size = new Size(1000, 550),
             StartPosition = FormStartPosition.CenterParent };
         var grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true,
-            AutoGenerateColumns = true, AllowUserToAddRows = false, RowHeadersVisible = false,
+            AutoGenerateColumns = false, AllowUserToAddRows = false, RowHeadersVisible = false,
             DataSource = performance.Entries.OrderByDescending(x => x.LastNew)
                 .ThenByDescending(x => x.LastWorking).ToArray() };
+        void Column(string property, string header, int width) =>
+            grid.Columns.Add(new DataGridViewTextBoxColumn {
+                DataPropertyName = property, HeaderText = header, Width = width });
+        Column("Url", "Quelle (URL)", 400);
+        Column("Runs", "Abrufe", 65);
+        Column("LastWorking", "Zuletzt OK", 85);
+        Column("LastNew", "Zuletzt neu", 85);
+        Column("TotalNew", "Insgesamt neu", 105);
+        Column("RunsWithoutNew", "Ohne neue Treffer", 120);
+        Column("LastCheckedUtc", "Letzter Abruf (UTC)", 150);
         dialog.Controls.Add(grid);
         dialog.ShowDialog(this);
     }
