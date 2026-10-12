@@ -51,6 +51,7 @@ public sealed class MainForm : Form
     private static string SourcesPath => Path.Combine(AppDirectory, "sources.txt");
     private static string ResultsDirectory => Path.Combine(AppDirectory, "Ergebnisse");
     private static string HistoryPath => Path.Combine(AppDirectory, "proxy_history.json");
+    private static string SourcePerformancePath => Path.Combine(AppDirectory, "source_performance.json");
     private static string WindowSettingsPath => Path.Combine(AppDirectory, "window_settings.json");
     private static string LegacyPoolDirectory => Path.Combine(AppDirectory, "Gefundene_Proxys");
     private ProxyCheckProfile SelectedProfile => _profile.SelectedIndex == 1
@@ -58,7 +59,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "ProxySammler 1.8.5";
+        Text = "ProxySammler 1.8.6";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(780, 550);
@@ -356,6 +357,11 @@ public sealed class MainForm : Form
         {
             var collector = new ProxyCollector();
             var sources = ProxyCollector.ReadSources(SourcesPath);
+            var performance = SourcePerformanceStore.Load(SourcePerformancePath);
+            var fetchedSources = automatic
+                ? sources.Where(source => performance.ShouldFetch(source.Url, DateTime.UtcNow)).ToArray()
+                : sources.ToArray();
+            var pausedSources = sources.Count - fetchedSources.Length;
             var collectionEta = new RemainingTimeEstimator();
             var sourceProgress = new Progress<(int Done, int Total)>(value =>
             {
@@ -364,7 +370,7 @@ public sealed class MainForm : Form
                 _phase.Text = $"Quellen laden: {value.Done:N0} von {value.Total:N0} · " +
                     collectionEta.Update("Quellen laden", value.Done, value.Total);
             });
-            var collection = await collector.CollectAsync(sources, protocols,
+            var collection = await collector.CollectAsync(fetchedSources, protocols,
                 new Progress<string>(text => _status.Text = text), _cancellation!.Token, sourceProgress);
             var failedSources = collection.Sources.Count(s => s.Error is not null);
             if (!onlyNew && collection.Proxies.Count == 0)
@@ -380,6 +386,7 @@ public sealed class MainForm : Form
             history.Update(initialResults);
 
             var store = ProxyListStore.Load(ResultsDirectory, LegacyPoolDirectory);
+            var existing = store.Select(protocols).Select(p => p.Url).ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (onlyNew)
             {
                 var added = store.AddWorking(initialResults);
@@ -392,13 +399,15 @@ public sealed class MainForm : Form
                     throw new InvalidOperationException("Bei der Nachprüfung wurde kein Proxy bestätigt. Die vorhandenen Listen wurden zum Schutz nicht überschrieben. Bitte Internetverbindung und Testziel prüfen.");
 
                 var removed = store.ReplaceSelected(protocols, _allResults);
+                RecordSourcePerformance(performance, collection.Sources, initialResults, _allResults, existing);
                 store.Save(ResultsDirectory);
+                performance.Save(SourcePerformancePath);
                 history.Save(HistoryPath);
                 var duration = CompleteRun($"{working:N0} aktuell funktionierende Proxys", failedSources);
                 if (!automatic) MessageBox.Show(
                     $"Suche nach neuen Proxys abgeschlossen.\n\nNeue Treffer angehängt: {added:N0}\n" +
                     $"Gesamtliste geprüft: {fullList.Count:N0}\nTote Proxys entfernt: {removed:N0}\n" +
-                    $"Aktuell funktionierend: {working:N0}\nBereits bekannte Kandidaten ausgelassen: {skipped:N0}\n" +
+                    $"Aktuell funktionierend: {working:N0}\nBereits bekannte Kandidaten ausgelassen: {skipped:N0}\nQuellen pausiert: {pausedSources:N0}\n" +
                     $"Dauer der Suche: {duration}\n\n" +
                     $"Listen:\n{ResultsDirectory}", "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
@@ -406,13 +415,15 @@ public sealed class MainForm : Form
             {
                 _allResults = initialResults;
                 store.ReplaceSelected(protocols, _allResults);
+                RecordSourcePerformance(performance, collection.Sources, initialResults, _allResults, existing);
                 store.Save(ResultsDirectory);
+                performance.Save(SourcePerformancePath);
                 history.Save(HistoryPath);
                 var working = _allResults.Count(r => r.IsWorking);
                 var duration = CompleteRun($"{working:N0} funktionierende Proxys", failedSources);
                 if (!automatic) MessageBox.Show(
                     $"Prüfung abgeschlossen.\n\nFunktionierend: {working:N0} von {_allResults.Count:N0}\n" +
-                    $"Negativcache übersprungen: {skipped:N0}\nDauer der Suche: {duration}\n\nListen:\n{ResultsDirectory}",
+                    $"Negativcache übersprungen: {skipped:N0}\nQuellen pausiert: {pausedSources:N0}\nDauer der Suche: {duration}\n\nListen:\n{ResultsDirectory}",
                     "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             RenderResults();
@@ -509,7 +520,8 @@ public sealed class MainForm : Form
             });
             return await checker.CheckAllTurboAsync(candidates, (int)_concurrency.Value,
                 TimeSpan.FromSeconds((double)_timeout.Value), TimeSpan.FromSeconds(1),
-                resultProgress, phases, _cancellation!.Token);
+                resultProgress, phases, _cancellation!.Token, adaptive: true,
+                 botProgress: new Progress<int>(bots => _status.Text = $"Prüfung mit {bots} Bots"));
         }
 
         var counts = new Progress<(int done, int total)>(value =>
@@ -520,7 +532,41 @@ public sealed class MainForm : Form
                 eta.Update(label, value.done, value.total);
         });
         return await checker.CheckAllAsync(candidates, (int)_concurrency.Value,
-            TimeSpan.FromSeconds((double)_timeout.Value), resultProgress, counts, _cancellation!.Token);
+            TimeSpan.FromSeconds((double)_timeout.Value), resultProgress, counts, _cancellation!.Token,
+             adaptive: true, botProgress: new Progress<int>(bots => _status.Text = $"Prüfung mit {bots} Bots"));
+    }
+
+    private static void RecordSourcePerformance(SourcePerformanceStore performance,
+        IReadOnlyList<SourceResult> sources, IReadOnlyList<ProxyTestResult> firstPass,
+        IReadOnlyList<ProxyTestResult> finalPass, HashSet<string> existing)
+    {
+        var passed = firstPass.Where(r => r.IsWorking).Select(r => r.Proxy.Url)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var confirmed = finalPass.Where(r => r.IsWorking).Select(r => r.Proxy.Url)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var credited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in sources.Where(s => s.Error is null))
+        {
+            var working = source.Proxies.Count(p => confirmed.Contains(p.Url));
+            var fresh = 0;
+            foreach (var proxy in source.Proxies)
+                if (passed.Contains(proxy.Url) && confirmed.Contains(proxy.Url) &&
+                    !existing.Contains(proxy.Url) && credited.Add(proxy.Url)) fresh++;
+            performance.Record(source.Source.Url, working, fresh, DateTime.UtcNow);
+        }
+    }
+
+    internal void ShowSourcePerformance()
+    {
+        var performance = SourcePerformanceStore.Load(SourcePerformancePath);
+        using var dialog = new Form { Text = "Quellenertrag", Size = new Size(1000, 550),
+            StartPosition = FormStartPosition.CenterParent };
+        var grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true,
+            AutoGenerateColumns = true, AllowUserToAddRows = false, RowHeadersVisible = false,
+            DataSource = performance.Entries.OrderByDescending(x => x.LastNew)
+                .ThenByDescending(x => x.LastWorking).ToArray() };
+        dialog.Controls.Add(grid);
+        dialog.ShowDialog(this);
     }
 
     private HashSet<ProxyProtocol> SelectedProtocols(bool showWarning = true)

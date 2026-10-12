@@ -6,7 +6,7 @@ namespace ProxySammler.Persistence;
 
 public static class AtomicTextFile
 {
-    public static void Write(string path, string text)
+    public static void Write(string path, string text, bool createBackup = true)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
         Directory.CreateDirectory(directory);
@@ -16,7 +16,7 @@ public static class AtomicTextFile
             File.WriteAllText(temp, text, new UTF8Encoding(false));
             if (File.Exists(path))
             {
-                var backup = path + ".bak";
+                var backup = createBackup ? path + ".bak" : null;
                 File.Replace(temp, path, backup, ignoreMetadataErrors: true);
             }
             else File.Move(temp, path);
@@ -77,4 +77,52 @@ public static class SourceRegistry
         AtomicTextFile.Write(path, updated);
         return true;
     }
+}
+
+public sealed class SourcePerformanceStore
+{
+    public sealed class Entry
+    {
+        public string Url { get; set; } = "";
+        public int Runs { get; set; }
+        public int RunsWithoutNew { get; set; }
+        public int LastWorking { get; set; }
+        public int LastNew { get; set; }
+        public int TotalNew { get; set; }
+        public DateTime LastCheckedUtc { get; set; }
+    }
+
+    private readonly Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyCollection<Entry> Entries => _entries.Values.ToArray();
+
+    public static SourcePerformanceStore Load(string path)
+    {
+        var result = new SourcePerformanceStore();
+        try
+        {
+            if (File.Exists(path))
+                foreach (var entry in JsonSerializer.Deserialize<List<Entry>>(File.ReadAllText(path)) ?? [])
+                    if (!string.IsNullOrWhiteSpace(entry.Url)) result._entries[entry.Url] = entry;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+        return result;
+    }
+
+    public bool ShouldFetch(string url, DateTime now) =>
+        !_entries.TryGetValue(url, out var entry) || entry.RunsWithoutNew < 3 ||
+        now - entry.LastCheckedUtc >= TimeSpan.FromHours(6);
+
+    public void Record(string url, int working, int newWorking, DateTime now)
+    {
+        if (!_entries.TryGetValue(url, out var entry)) _entries[url] = entry = new Entry { Url = url };
+        entry.Runs++;
+        entry.LastWorking = working;
+        entry.LastNew = newWorking;
+        entry.TotalNew += newWorking;
+        entry.RunsWithoutNew = newWorking == 0 ? Math.Min(3, entry.RunsWithoutNew + 1) : 0;
+        entry.LastCheckedUtc = now;
+    }
+
+    public void Save(string path) =>
+        AtomicTextFile.Write(path, JsonSerializer.Serialize(_entries.Values.OrderBy(x => x.Url), new JsonSerializerOptions { WriteIndented = true }));
 }

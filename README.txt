@@ -1,4 +1,4 @@
-PROXYSAMMLER 1.8.5
+PROXYSAMMLER 1.8.6
 ================
 
 Portable Windows-Anwendung zum Sammeln und Prüfen freier HTTP-, SOCKS4- und
@@ -7,7 +7,7 @@ SOCKS5-Proxys.
 START
 -----
 1. ZIP-Datei vollständig entpacken.
-2. ProxySammler-1.8.5-Windows-x64.exe starten.
+2. ProxySammler-1.8.6-Windows-x64.exe starten.
 3. Gewünschte Proxytypen und das Prüfprofil auswählen.
 4. "Sammeln und prüfen" oder "Neue Proxys suchen" anklicken.
 
@@ -77,8 +77,11 @@ Listen überspringt keine Einträge.
 
 PRÜF-BOTS UND TIMEOUT
 ---------------------
-Die Zahl der Prüfbots bestimmt, wie viele Kandidaten gleichzeitig geprüft
-werden. 50 ist ein guter Ausgangswert. Bei Router- oder Verbindungsproblemen
+Die Zahl der Prüfbots ist die Obergrenze für gleichzeitige Prüfungen. Bei
+großen Kandidatenmengen beginnt das Programm mit höchstens 50 Bots und passt
+die Zahl zwischen Prüfblöcken anhand von Durchsatz und Zeitüberschreitungen
+vorsichtig bis zur gewählten Obergrenze an. Kleine Mengen nutzen sofort den
+eingestellten Wert. 50 ist ein guter Ausgangswert. Bei Router- oder Verbindungsproblemen
 den Wert reduzieren. Der Timeout bestimmt die maximale Dauer einer einzelnen
 vollständigen Prüfung.
 
@@ -89,7 +92,13 @@ angezeigten Prüflaufs zeilenweise in die Windows-Zwischenablage kopiert.
 
 QUELLEN
 -------
-Die Datei sources.txt kann über "Quellen bearbeiten" geöffnet werden. Format:
+Die Datei sources.txt kann über "Quellen bearbeiten" geöffnet werden.
+Im Fenster "Neue Quellen finden" zeigt "Quellenertrag" pro URL die letzten
+funktionierenden und neu bestätigten Proxys sowie den Gesamtertrag. Nach
+drei Abrufen ohne neue bestätigte Treffer wird eine Quelle bei der stündlichen
+automatischen Suche sechs Stunden pausiert. Manuell gestartete Suchen laden
+weiterhin alle Quellen; eine erfolgreiche Quelle wird wieder normal berücksichtigt.
+Die Statistik steht in source_performance.json. Format:
 
   protokoll|https://adresse/zur/liste.txt
 
@@ -154,6 +163,13 @@ Fenstern verschieben sich Optionsgruppen und Buttons in zusätzliche Zeilen.
 Die Buttons der zweiten Zeile behalten nach dem Start ihre Breite und Position,
 bis der Platz für einen Umbruch nicht mehr ausreicht.
 
+ÄNDERUNGEN IN 1.8.6
+------------------
+- Quellenertrag pro URL anzeigen und bei automatischer Suche Quellen ohne
+  neue bestätigte Treffer zeitweise pausieren.
+- Bei großen Prüfungen die Zahl gleichzeitig aktiver Bots vorsichtig anpassen.
+- Die drei Ergebnislisten über temporäre Dateien sicher ersetzen.
+
 ÄNDERUNGEN IN 1.8.5
 ------------------
 - Abschlussmeldungen nennen die Dauer der Suche oder Listenprüfung.
@@ -189,4 +205,4 @@ UPDATE
 ------
 Die neue EXE kann im bisherigen Programmordner verwendet werden. Beim Entpacken
 nicht die eigene sources.txt durch die mitgelieferte Standardliste ersetzen.
-Ergebnisse, proxy_history.json, window_settings.json und die JSON-Dateien der Quellensuche behalten.
+Ergebnisse, proxy_history.json, source_performance.json, window_settings.json und die JSON-Dateien der Quellensuche behalten.

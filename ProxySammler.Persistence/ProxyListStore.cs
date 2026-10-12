@@ -75,7 +75,10 @@ public sealed class ProxyListStore
                 .OrderBy(p => p.Host, StringComparer.Ordinal)
                 .ThenBy(p => p.Port)
                 .Select(p => p.Address);
-            File.WriteAllLines(Path.Combine(resultsDirectory, FileName(protocol)), lines, new UTF8Encoding(false));
+            var values = lines.ToArray();
+            AtomicTextFile.Write(Path.Combine(resultsDirectory, FileName(protocol)),
+                values.Length == 0 ? "" : string.Join(Environment.NewLine, values) + Environment.NewLine,
+                createBackup: false);
         }
     }
 
