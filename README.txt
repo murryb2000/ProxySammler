@@ -1,4 +1,4 @@
-PROXYSAMMLER 1.8.4
+PROXYSAMMLER 1.8.5
 ================
 
 Portable Windows-Anwendung zum Sammeln und Prüfen freier HTTP-, SOCKS4- und
@@ -7,7 +7,7 @@ SOCKS5-Proxys.
 START
 -----
 1. ZIP-Datei vollständig entpacken.
-2. ProxySammler-1.8.4-Windows-x64.exe starten.
+2. ProxySammler-1.8.5-Windows-x64.exe starten.
 3. Gewünschte Proxytypen und das Prüfprofil auswählen.
 4. "Sammeln und prüfen" oder "Neue Proxys suchen" anklicken.
 
@@ -153,6 +153,11 @@ Auf kleineren Bildschirmen wird das Fenster passend begrenzt. Bei schmalen
 Fenstern verschieben sich Optionsgruppen und Buttons in zusätzliche Zeilen.
 Die Buttons der zweiten Zeile behalten nach dem Start ihre Breite und Position,
 bis der Platz für einen Umbruch nicht mehr ausreicht.
+
+ÄNDERUNGEN IN 1.8.5
+------------------
+- Abschlussmeldungen nennen die Dauer der Suche oder Listenprüfung.
+- In der Statuszeile steht die Laufzeit direkt hinter „Fertig“.
 
 ÄNDERUNGEN IN 1.8.4
 ------------------
