@@ -103,11 +103,11 @@ public sealed class ProxyCollector
 				{
 					unique[$"{proxyEndpoint.Protocol}|{proxyEndpoint.Host}|{proxyEndpoint.Port}"] = proxyEndpoint;
 				}
-				sourceResults.Add(new SourceResult(source, array.Length, null));
+				sourceResults.Add(new SourceResult(source, array.Length, null, array));
 			}
 			catch (Exception ex) when (!(ex is OperationCanceledException))
 			{
-				sourceResults.Add(new SourceResult(source, 0, ShortError(ex)));
+				sourceResults.Add(new SourceResult(source, 0, ShortError(ex), Array.Empty<ProxyEndpoint>()));
 			}
             finally
             {
