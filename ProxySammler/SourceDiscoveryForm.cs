@@ -20,7 +20,7 @@ public sealed class SourceDiscoveryForm : Form
     public SourceDiscoveryForm(MainForm main, IReadOnlyCollection<SourceCandidate> candidates, DiscoverySettings settings)
     {
         _main = main;
-        Text = "Neue Quellen finden – ProxySammler 1.8.5";
+        Text = "Neue Quellen finden – ProxySammler 1.8.6";
         Size = new Size(1300, 650);
         MinimumSize = new Size(950, 480);
         StartPosition = FormStartPosition.CenterParent;
@@ -73,6 +73,7 @@ public sealed class SourceDiscoveryForm : Form
         Button("Alle geeigneten Quellen übernehmen", () => _main.AcceptAllSources());
         Button("Quelle ignorieren", () => { if (Selected is { } c) { c.Status = CandidateStatus.Ignoriert; _main.SaveCandidates(); RefreshRows(); } });
         Button("Übernommene Quellen öffnen", () => _main.OpenSources());
+        Button("Quellenertrag", () => _main.ShowSourcePerformance());
         layout.Controls.Add(actions, 0, 2);
         layout.Controls.Add(_status, 0, 3);
         Controls.Add(layout);
