@@ -151,6 +151,8 @@ Größe, Position und maximierter Zustand werden beim Schließen in
 window_settings.json gespeichert und beim nächsten Start wiederhergestellt.
 Auf kleineren Bildschirmen wird das Fenster passend begrenzt. Bei schmalen
 Fenstern verschieben sich Optionsgruppen und Buttons in zusätzliche Zeilen.
+Die Buttons der zweiten Zeile behalten nach dem Start ihre Breite und Position,
+bis der Platz für einen Umbruch nicht mehr ausreicht.
 
 ÄNDERUNGEN IN 1.8.4
 ------------------
