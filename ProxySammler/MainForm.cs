@@ -44,6 +44,7 @@ public sealed class MainForm : Form
     private readonly ToolStripStatusLabel _counts = new() { Spring = true, TextAlign = ContentAlignment.MiddleRight };
     private readonly Label _phase = new() { Text = "Bereit", AutoEllipsis = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
     private CancellationTokenSource? _cancellation;
+    private readonly Stopwatch _runWatch = new();
     private IReadOnlyList<ProxyTestResult> _allResults = Array.Empty<ProxyTestResult>();
 
     private static string AppDirectory => AppContext.BaseDirectory;
@@ -57,7 +58,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "ProxySammler 1.8.4";
+        Text = "ProxySammler 1.8.5";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(780, 550);
@@ -393,11 +394,12 @@ public sealed class MainForm : Form
                 var removed = store.ReplaceSelected(protocols, _allResults);
                 store.Save(ResultsDirectory);
                 history.Save(HistoryPath);
-                CompleteRun($"{working:N0} aktuell funktionierende Proxys", failedSources);
+                var duration = CompleteRun($"{working:N0} aktuell funktionierende Proxys", failedSources);
                 if (!automatic) MessageBox.Show(
                     $"Suche nach neuen Proxys abgeschlossen.\n\nNeue Treffer angehängt: {added:N0}\n" +
                     $"Gesamtliste geprüft: {fullList.Count:N0}\nTote Proxys entfernt: {removed:N0}\n" +
-                    $"Aktuell funktionierend: {working:N0}\nBereits bekannte Kandidaten ausgelassen: {skipped:N0}\n\n" +
+                    $"Aktuell funktionierend: {working:N0}\nBereits bekannte Kandidaten ausgelassen: {skipped:N0}\n" +
+                    $"Dauer der Suche: {duration}\n\n" +
                     $"Listen:\n{ResultsDirectory}", "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             else
@@ -407,10 +409,10 @@ public sealed class MainForm : Form
                 store.Save(ResultsDirectory);
                 history.Save(HistoryPath);
                 var working = _allResults.Count(r => r.IsWorking);
-                CompleteRun($"{working:N0} funktionierende Proxys", failedSources);
+                var duration = CompleteRun($"{working:N0} funktionierende Proxys", failedSources);
                 if (!automatic) MessageBox.Show(
                     $"Prüfung abgeschlossen.\n\nFunktionierend: {working:N0} von {_allResults.Count:N0}\n" +
-                    $"Negativcache übersprungen: {skipped:N0}\n\nListen:\n{ResultsDirectory}",
+                    $"Negativcache übersprungen: {skipped:N0}\nDauer der Suche: {duration}\n\nListen:\n{ResultsDirectory}",
                     "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             RenderResults();
@@ -458,9 +460,9 @@ public sealed class MainForm : Form
             history.Update(_allResults);
             history.Save(HistoryPath);
             RenderResults();
-            CompleteRun($"{working:N0} weiterhin funktionierend – {removed:N0} entfernt", 0);
+            var duration = CompleteRun($"{working:N0} weiterhin funktionierend – {removed:N0} entfernt", 0);
             MessageBox.Show($"Listenprüfung abgeschlossen.\n\nWeiterhin funktionierend: {working:N0}\n" +
-                $"Tote Proxys entfernt: {removed:N0}\n\nListen:\n{ResultsDirectory}",
+                $"Tote Proxys entfernt: {removed:N0}\nDauer der Prüfung: {duration}\n\nListen:\n{ResultsDirectory}",
                 "ProxySammler", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (OperationCanceledException)
@@ -538,6 +540,7 @@ public sealed class MainForm : Form
         _rows.Clear();
         _progress.Value = 0;
         _cancellation = new CancellationTokenSource();
+        _runWatch.Restart();
         SetRunning(true);
         _status.Text = title;
         _phase.Text = "Vorbereitung…";
@@ -545,16 +548,31 @@ public sealed class MainForm : Form
 
     private void EndRun()
     {
+        _runWatch.Stop();
         _cancellation?.Dispose();
         _cancellation = null;
         SetRunning(false);
     }
 
-    private void CompleteRun(string text, int failedSources)
+    private string CompleteRun(string text, int failedSources)
     {
-        _status.Text = "Fertig";
+        _runWatch.Stop();
+        var duration = FormatRunDuration(_runWatch.Elapsed);
+        _status.Text = $"Fertig ({duration})";
         _phase.Text = text;
         _counts.Text = failedSources > 0 ? $"{failedSources} Quelle(n) nicht erreichbar" : _counts.Text;
+        return duration;
+    }
+
+    private static string FormatRunDuration(TimeSpan elapsed)
+    {
+        var seconds = Math.Max(0, (long)Math.Ceiling(elapsed.TotalSeconds));
+        var hours = seconds / 3600;
+        var minutes = seconds / 60 % 60;
+        var remainder = seconds % 60;
+        if (hours > 0) return $"{hours} Std. {minutes} Min. {remainder} Sek.";
+        if (minutes > 0) return $"{minutes} Min. {remainder} Sek.";
+        return $"{remainder} Sek.";
     }
 
     private void RenderResults()
