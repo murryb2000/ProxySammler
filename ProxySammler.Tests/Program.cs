@@ -56,6 +56,32 @@ try
     Assert(File.ReadAllText(Path.Combine(temp, "SOCKS5.txt")).Contains("5.6.7.8:1080"),
         "Nicht ausgewählte Listen müssen unverändert bleiben.");
 
+    Assert(!Directory.GetFiles(temp).Any(path => Path.GetFileName(path).EndsWith(".bak", StringComparison.OrdinalIgnoreCase)),
+        "Im Ergebnisordner dürfen durch das Speichern keine zusätzlichen Sicherungslisten entstehen.");
+    Assert(!Directory.GetFiles(temp).Any(path => Path.GetFileName(path).EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)),
+        "Temporäre Ergebnisdateien müssen nach dem Speichern entfernt werden.");
+
+    var qualityPath = Path.Combine(temp, "source_performance.json");
+    var quality = new SourcePerformanceStore();
+    var stamp = DateTime.UtcNow;
+    const string sourceUrl = "https://example.com/list.txt";
+    quality.Record(sourceUrl, 0, 0, stamp);
+    quality.Record(sourceUrl, 1, 0, stamp);
+    quality.Record(sourceUrl, 1, 0, stamp);
+    Assert(!quality.ShouldFetch(sourceUrl, stamp.AddHours(1)) &&
+        quality.ShouldFetch(sourceUrl, stamp.AddHours(6)),
+        "Quellen ohne neue Treffer sollen bei automatischen Läufen für sechs Stunden pausieren.");
+    quality.Record(sourceUrl, 2, 1, stamp.AddHours(6));
+    quality.Save(qualityPath);
+    var recoveredQuality = SourcePerformanceStore.Load(qualityPath);
+    Assert(recoveredQuality.ShouldFetch(sourceUrl, stamp.AddHours(6)) &&
+        recoveredQuality.Entries.Single().TotalNew == 1,
+        "Ein neuer bestätigter Treffer muss die Pause beenden und den Ertrag dauerhaft speichern.");
+
+    var emptyAdaptive = await new ProxyChecker().CheckAllAsync(Array.Empty<ProxyEndpoint>(),
+        50, TimeSpan.FromSeconds(1), null, null, CancellationToken.None, adaptive: true);
+    Assert(emptyAdaptive.Count == 0, "Automatische Bot-Anpassung muss auch leere Kandidatenlisten behandeln.");
+
     var migrationRoot = Path.Combine(temp, "migration");
     var results = Path.Combine(migrationRoot, "Ergebnisse");
     var legacy = Path.Combine(migrationRoot, "Gefundene_Proxys");
