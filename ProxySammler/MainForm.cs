@@ -116,7 +116,11 @@ public sealed class MainForm : Form
                 await DiscoverAsync(true);
         };
         _discoveryTimer.Start();
-        Load += (_, _) => RestoreWindowGeometry();
+        Load += (_, _) =>
+        {
+            RestoreWindowGeometry();
+            FreezeActionButtonSizes();
+        };
         FormClosing += (_, e) =>
         {
             if (_cancellation is { IsCancellationRequested: false })
@@ -134,6 +138,20 @@ public sealed class MainForm : Form
                 _discoveryCancellation?.Cancel();
             }
         };
+    }
+
+    private void FreezeActionButtonSizes()
+    {
+        // Keep all buttons in the second row at their displayed widths. The
+        // toolbar still wraps them when the window becomes too narrow.
+        foreach (var button in new[] { _start, _newOnly, _retestLists, _stop,
+                     _clipboard, _sources, _discover, _folder })
+        {
+            var width = Math.Max(button.Width, button.GetPreferredSize(Size.Empty).Width);
+            var height = button.Height;
+            button.AutoSize = false;
+            button.Size = new Size(width, height);
+        }
     }
 
     private void RestoreWindowGeometry()
