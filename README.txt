@@ -1,4 +1,4 @@
-PROXYSAMMLER 1.8.6
+PROXYSAMMLER 1.8.7
 ================
 
 Portable Windows-Anwendung zum Sammeln und Prüfen freier HTTP-, SOCKS4- und
@@ -7,7 +7,7 @@ SOCKS5-Proxys.
 START
 -----
 1. ZIP-Datei vollständig entpacken.
-2. ProxySammler-1.8.6-Windows-x64.exe starten.
+2. ProxySammler-1.8.7-Windows-x64.exe starten.
 3. Gewünschte Proxytypen und das Prüfprofil auswählen.
 4. "Sammeln und prüfen" oder "Neue Proxys suchen" anklicken.
 
@@ -94,7 +94,11 @@ QUELLEN
 -------
 Die Datei sources.txt kann über "Quellen bearbeiten" geöffnet werden.
 Im Fenster "Neue Quellen finden" zeigt "Quellenertrag" pro URL die letzten
-funktionierenden und neu bestätigten Proxys sowie den Gesamtertrag. Nach
+funktionierenden und neu bestätigten Proxys sowie den Gesamtertrag. Diese
+Statistik beginnt erst nach einem erfolgreich abgeschlossenen Lauf von
+"Sammeln und prüfen" oder "Neue Proxys suchen"; die Stichproben bei der
+Quellensuche zählen dort nicht mit. Vor dem ersten Lauf zeigt das Fenster
+einen entsprechenden Hinweis. Nach
 drei Abrufen ohne neue bestätigte Treffer wird eine Quelle bei der stündlichen
 automatischen Suche sechs Stunden pausiert. Manuell gestartete Suchen laden
 weiterhin alle Quellen; eine erfolgreiche Quelle wird wieder normal berücksichtigt.
@@ -162,6 +166,11 @@ Auf kleineren Bildschirmen wird das Fenster passend begrenzt. Bei schmalen
 Fenstern verschieben sich Optionsgruppen und Buttons in zusätzliche Zeilen.
 Die Buttons der zweiten Zeile behalten nach dem Start ihre Breite und Position,
 bis der Platz für einen Umbruch nicht mehr ausreicht.
+
+ÄNDERUNGEN IN 1.8.7
+------------------
+- Ein leeres Quellenertragsfenster erklärt, welcher Prüflauf die Statistik
+  füllt und warum vorhandene Stichproben dort noch nicht erscheinen.
 
 ÄNDERUNGEN IN 1.8.6
 ------------------
