@@ -59,7 +59,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "ProxySammler 1.8.6";
+        Text = "ProxySammler 1.8.7";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(780, 550);
@@ -561,10 +561,11 @@ public sealed class MainForm : Form
         var performance = SourcePerformanceStore.Load(SourcePerformancePath);
         using var dialog = new Form { Text = "Quellenertrag", Size = new Size(1000, 550),
             StartPosition = FormStartPosition.CenterParent };
+        var entries = performance.Entries.OrderByDescending(x => x.LastNew)
+            .ThenByDescending(x => x.LastWorking).ToArray();
         var grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true,
             AutoGenerateColumns = false, AllowUserToAddRows = false, RowHeadersVisible = false,
-            DataSource = performance.Entries.OrderByDescending(x => x.LastNew)
-                .ThenByDescending(x => x.LastWorking).ToArray() };
+            DataSource = entries };
         void Column(string property, string header, int width) =>
             grid.Columns.Add(new DataGridViewTextBoxColumn {
                 DataPropertyName = property, HeaderText = header, Width = width });
@@ -575,7 +576,12 @@ public sealed class MainForm : Form
         Column("TotalNew", "Insgesamt neu", 105);
         Column("RunsWithoutNew", "Ohne neue Treffer", 120);
         Column("LastCheckedUtc", "Letzter Abruf (UTC)", 150);
+        var hint = new Label { Dock = DockStyle.Top, Height = 58, Padding = new Padding(12, 9, 12, 0),
+            Text = entries.Length == 0
+                ? "Noch keine Ertragsdaten vorhanden. Starte einmal „Sammeln und prüfen“ oder „Neue Proxys suchen“ und warte, bis der Lauf abgeschlossen ist. Die Stichproben unter „Neue Quellen finden“ zählen hier nicht mit."
+                : "Ertrag aus abgeschlossenen Proxy-Suchläufen. Die Stichproben unter „Neue Quellen finden“ werden getrennt angezeigt." };
         dialog.Controls.Add(grid);
+        dialog.Controls.Add(hint);
         dialog.ShowDialog(this);
     }
 
